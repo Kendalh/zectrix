@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>ZecTrix 模拟器</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #e9e6df; margin: 0; padding: 24px; color: #222; }
+  .wrap { display: flex; gap: 32px; align-items: flex-start; flex-wrap: wrap; }
+  .device { background: #f7f5ef; border-radius: 18px; padding: 22px; box-shadow: 0 4px 18px #0003; }
+  .screen { display: block; width: 800px; height: 600px; image-rendering: pixelated; background: #fff;
+            border: 10px solid #1d1d1d; border-radius: 6px; }
+  .buttons { display: flex; justify-content: center; gap: 18px; margin-top: 18px; }
+  .btn { width: 110px; padding: 14px 0; border-radius: 10px; border: 2px solid #444; background: #fff;
+         font-size: 16px; cursor: pointer; user-select: none; touch-action: none; }
+  .btn:active, .btn.down { background: #ffd600; }
+  .btn small { display: block; font-size: 11px; color: #666; margin-top: 3px; }
+  .side { min-width: 260px; max-width: 340px; }
+  select, button.small { font-size: 14px; padding: 6px 10px; margin-right: 6px; }
+  #log { font: 12px/1.6 ui-monospace, monospace; background: #fff; border: 1px solid #ccc; border-radius: 6px;
+         padding: 8px; height: 260px; overflow: auto; white-space: pre-wrap; }
+  .hint { font-size: 13px; color: #555; line-height: 1.6; }
+  #err { color: #b00020; font-size: 13px; min-height: 18px; }
+</style>
+</head>
+<body>
+<h2 style="margin-top:0">ZecTrix 墨水屏模拟器</h2>
+<div class="wrap">
+  <div class="device">
+    <img id="screen" class="screen" alt="screen">
+    <div class="buttons">
+      <div class="btn" id="b-up">UP<small>↑</small></div>
+      <div class="btn" id="b-down">DOWN<small>↓</small></div>
+      <div class="btn" id="b-boot">BOOT<small>Enter / B</small></div>
+    </div>
+  </div>
+  <div class="side">
+    <p><label>页面 <select id="page"></select></label>
+       <button class="small" id="reset">重置</button></p>
+    <div id="err"></div>
+    <p class="hint">
+      单击：短按<br>
+      双击：快速连按两次（间隔 &lt; 300ms）<br>
+      长按：按住 ≥ 600ms<br>
+      键盘：↑ ↓ 对应 UP / DOWN，Enter 或 B 对应 BOOT，按住同样算长按
+    </p>
+    <div id="log"></div>
+  </div>
+</div>
+<script>
+const LONG_MS = 600, DOUBLE_MS = 300;
+const pageSel = document.getElementById('page');
+const img = document.getElementById('screen');
+const log = document.getElementById('log');
+const err = document.getElementById('err');
+let keys = [];
+let busy = Promise.resolve();
+
+async function loadPages() {
+  const pages = await (await fetch('/pages')).json();
+  pages.forEach(p => pageSel.add(new Option(p, p)));
+}
+
+function refresh() {
+  // Serialise requests so rapid presses never render out of order.
+  busy = busy.then(async () => {
+    const url = `/frame?page=${pageSel.value}&keys=${keys.join(',')}&t=${Date.now()}`;
+    const r = await fetch(url);
+    if (!r.ok) { err.textContent = await r.text(); return; }
+    err.textContent = '';
+    const consumed = r.headers.get('X-Consumed');
+    img.src = URL.createObjectURL(await r.blob());
+    if (keys.length) {
+      const note = consumed === '0' ? '  (页面未处理该按键)' : '';
+      log.textContent += `${keys.length}. ${keys[keys.length - 1]}${note}\n`;
+      log.scrollTop = log.scrollHeight;
+    }
+  });
+}
+
+function press(name) { keys.push(name); refresh(); }
+
+// Turns raw down/up edges of one physical button into click / double / long events.
+function makeButton(base, el) {
+  let downAt = 0, pendingClick = null, longTimer = null, isDown = false;
+  function down() {
+    if (isDown) return;           // ignore key auto-repeat
+    isDown = true; downAt = Date.now(); el.classList.add('down');
+    longTimer = setTimeout(() => {
+      longTimer = null; pendingClick = null; press(base + 'long');
+    }, LONG_MS);
+  }
+  function up() {
+    if (!isDown) return;
+    isDown = false; el.classList.remove('down');
+    if (longTimer === null) return;   // long press already fired
+    clearTimeout(longTimer); longTimer = null;
+    if (pendingClick) {               // second short press inside the window
+      clearTimeout(pendingClick); pendingClick = null; press(base + '2');
+    } else {
+      pendingClick = setTimeout(() => { pendingClick = null; press(base); }, DOUBLE_MS);
+    }
+  }
+  el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); down(); });
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  return { down, up };
+}
+
+const buttons = {
+  up: makeButton('up', document.getElementById('b-up')),
+  down: makeButton('down', document.getElementById('b-down')),
+  boot: makeButton('boot', document.getElementById('b-boot')),
+};
+const keyMap = { ArrowUp: 'up', ArrowDown: 'down', Enter: 'boot', b: 'boot', B: 'boot' };
+addEventListener('keydown', e => {
+  if (e.target === pageSel || !keyMap[e.key]) return;
+  e.preventDefault(); buttons[keyMap[e.key]].down();
+});
+addEventListener('keyup', e => {
+  if (!keyMap[e.key]) return;
+  e.preventDefault(); buttons[keyMap[e.key]].up();
+});
+
+function reset() { keys = []; log.textContent = ''; refresh(); }
+pageSel.addEventListener('change', () => { pageSel.blur(); reset(); });
+document.getElementById('reset').addEventListener('click', e => { e.target.blur(); reset(); });
+loadPages().then(reset);
+</script>
+</body>
+</html>
