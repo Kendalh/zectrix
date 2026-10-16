@@ -213,6 +213,7 @@ const char* RawDrawUiManager::GetPageTitle(RawDrawPageId page) {
         case RawDrawPageId::FontDebug:  return "对齐测试";
         case RawDrawPageId::FontMetrics: return "字体指标";
         case RawDrawPageId::APTransfer: return "传图模式";
+        case RawDrawPageId::Home:     return "首页";
         default:               return "未知";
     }
 }
@@ -225,13 +226,23 @@ RawDrawUiManager::RawDrawUiManager()
     : lcd_(nullptr)
     , width_(Style::kScreenWidth)
     , height_(Style::kScreenHeight)
-    , current_page_(RawDrawPageId::Gallery)
+    , current_page_(RawDrawPageId::Home)
     , refresh_cb_(nullptr)
     , full_refresh_pending_(false)
     , clock_(rawdraw::kClockX, rawdraw::kClockY, &font_zectrix_16_1)
     , voice_wakeup_state_() {
     // Create renderers
     clock_.SetColor(rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::Accent).fg);
+    home_renderer_ = std::make_unique<rawdraw::HomeRenderer>();
+    home_renderer_->SetLaunchCallback([this](const AppEntry& app) { app_shell_.Launch(app); });
+    AppShell::Host shell_host;
+    shell_host.open_page = [this](RawDrawPageId page) { SwitchPage(page); };
+    shell_host.start_ap_transfer = [this]() { StartApTransferMode(); };
+    shell_host.stop_ap_transfer = [this]() { StopApTransferMode(); };
+    shell_host.start_wifi_config = [this]() {
+        if (wifi_config_request_cb_) wifi_config_request_cb_();
+    };
+    app_shell_.SetHost(std::move(shell_host));
     chat_renderer_ = std::make_unique<rawdraw::ChatRenderer>();
     ebook_renderer_ = std::make_unique<rawdraw::EbookRenderer>();
     wifi_renderer_ = std::make_unique<rawdraw::WifiRenderer>();
@@ -320,7 +331,7 @@ RawDrawUiManager::RawDrawUiManager()
     });
 
     // Initialize status bar defaults
-    status_bar_data_.page_title = GetPageTitle(RawDrawPageId::Gallery);
+    status_bar_data_.page_title = GetPageTitle(RawDrawPageId::Home);
     status_bar_data_.wifi_connected = false;
     status_bar_data_.server_connected = false;
     status_bar_data_.battery_level = -1;
@@ -554,6 +565,7 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::FontDebug:  return font_debug_renderer_.get();
         case RawDrawPageId::FontMetrics: return font_metrics_renderer_.get();
         case RawDrawPageId::APTransfer: return ap_transfer_renderer_.get();
+        case RawDrawPageId::Home:     return home_renderer_.get();
         default:               return nullptr;
     }
 }
@@ -673,7 +685,7 @@ void RawDrawUiManager::StopApTransferMode() {
     if (ap_transfer_server_) {
         ap_transfer_server_->Stop();
     }
-    SwitchPage(RawDrawPageId::Gallery);
+    SwitchPage(RawDrawPageId::Home);
 }
 
 void RawDrawUiManager::ShowWifiConfigPage(const std::string& ssid,
@@ -724,9 +736,9 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
             return true;
         }
 
-        if (current_page_ == RawDrawPageId::Gallery) {
-            ESP_LOGI(kTag, "Gallery long press BOOT - entering AP transfer mode");
-            StartApTransferMode();
+        // App-level rule shared with the simulator: BOOT long press returns to the Home page.
+        if (app_shell_.HandleGlobalInput(current_page_, event)) {
+            ESP_LOGI(kTag, "BOOT long press - returning to Home");
             return true;
         }
     }
@@ -1316,16 +1328,23 @@ void RawDrawUiManager::RequestActivePageRefresh() {
 }
 
 bool RawDrawUiManager::ShowPhotoById(const std::string& photo_id) {
-    if (!photo_gallery_renderer_ || photo_id.empty()) {
+    if (!photo_gallery_renderer_ || photo_id.empty() || !photo_exists(photo_id.c_str())) {
+        ESP_LOGW(kTag, "ShowPhotoById failed: id=%s not found", photo_id.c_str());
         return false;
     }
+    // Switch pages first: entering the gallery runs its Init(), which resets it to the card layout and
+    // the first photo. Selecting before the switch only worked while the gallery was already the active
+    // page (it used to be the default page; now it is reached from Home). The switch itself does not
+    // render, so the panel refreshes once, straight to the requested photo.
+    SetCurrentPageWithoutRender(RawDrawPageId::Gallery);
     photo_gallery_renderer_->RefreshPhotoList();
     if (!photo_gallery_renderer_->SetSelectedById(photo_id.c_str())) {
         ESP_LOGW(kTag, "ShowPhotoById failed: id=%s not found", photo_id.c_str());
         return false;
     }
     photo_gallery_renderer_->EnterFullscreenMode();
-    SwitchPage(RawDrawPageId::Gallery);
+    full_refresh_pending_ = true;
+    RefreshActivePage(true);
     ESP_LOGI(kTag, "Show photo fullscreen from HTTP: id=%s", photo_id.c_str());
     return true;
 }

@@ -12,7 +12,10 @@
 // Include LVGL header FIRST so font_engine.h detects LVGL types and skips redefining them
 #include "boards/zectrix-s3-epaper-4.2/custom_lcd_display.h"
 
+#include "ui/app_shell.h"
+#include "ui/page_ids.h"
 #include "ui/renderers/rawdraw/page_renderer.h"
+#include "ui/renderers/rawdraw/home_renderer.h"
 #include "ui/renderers/rawdraw/chat_renderer.h"
 #include "ui/renderers/rawdraw/settings_renderer.h"
 #include "ui/renderers/rawdraw/ebook_renderer.h"
@@ -51,33 +54,6 @@
 class CustomLcdDisplay;
 
 namespace ui {
-
-/**
- * @brief Page identifiers for the rawdraw UI
- *
- * Only pages with rawdraw renderers are included here.
- * Separate from ui::PageId to avoid conflict with LVGL UiManager.
- */
-enum class RawDrawPageId {
-    Chat = 0,
-    Ebook = 2,
-    Wifi = 3,
-    Settings = 4,
-    Gallery = 5,
-    Weather = 6,
-    News = 7,
-    WeatherDetail = 8,
-    PhotoDetail = 9,
-    LifeBar = 10,
-    Almanac = 11,
-    Log = 12,
-    YearProgress = 13,
-    Calendar = 14,
-    FontDebug = 15,
-    FontMetrics = 16,
-    APTransfer = 17,
-    Count,
-};
 
 /**
  * @brief Status bar data for rawdraw rendering
@@ -381,6 +357,16 @@ public:
      */
     static const char* GetPageTitle(RawDrawPageId page);
 
+    /**
+     * @brief Called when the user opens the "配网" app on the Home page.
+     *
+     * Wi-Fi provisioning is owned by Application (it stops the LAN service and starts the
+     * config hotspot), so the manager just forwards the request.
+     */
+    void SetWifiConfigRequestCallback(std::function<void()> callback) {
+        wifi_config_request_cb_ = std::move(callback);
+    }
+
     // ============================================================
     // Clock and voice wakeup integration
     // ============================================================
@@ -426,13 +412,14 @@ private:
     int height_ = 300;
 
     // Current page
-    RawDrawPageId current_page_ = RawDrawPageId::Gallery;
+    RawDrawPageId current_page_ = RawDrawPageId::Home;
 
     // Status bar
     RawDrawStatusBarData status_bar_data_;
     mutable std::mutex ui_state_mutex_;
 
     // Page renderers (owned)
+    std::unique_ptr<rawdraw::HomeRenderer> home_renderer_;
     std::unique_ptr<rawdraw::ChatRenderer> chat_renderer_;
     std::unique_ptr<rawdraw::EbookRenderer> ebook_renderer_;
     std::unique_ptr<rawdraw::WifiRenderer> wifi_renderer_;
@@ -451,6 +438,10 @@ private:
     std::unique_ptr<rawdraw::FontMetricsRenderer> font_metrics_renderer_;
     std::unique_ptr<rawdraw::ApTransferRenderer> ap_transfer_renderer_;
     std::unique_ptr<rawdraw::ApTransferServer> ap_transfer_server_;
+
+    // App-level navigation rules shared with the PC simulator (Home, long-press BOOT to go Home)
+    AppShell app_shell_;
+    std::function<void()> wifi_config_request_cb_;
 
     // Refresh callback (provided by CustomLcdDisplay)
     RefreshCallback refresh_cb_;

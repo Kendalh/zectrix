@@ -155,6 +155,8 @@ void Application::Initialize() {
         }
     });
 
+    rawdraw_ui_manager_->SetWifiConfigRequestCallback([this]() { OnWifiConfigComboLongPress(); });
+
     if (auto* sr = rawdraw_ui_manager_->GetSettingsRenderer()) {
         Settings gallery_nvs(kGalleryNamespace, false);
         int slideshow_interval = gallery_nvs.GetInt(kSlideshowIntervalKey, 5);
@@ -305,8 +307,8 @@ void Application::Initialize() {
                 if (rawdraw_ui_manager_ &&
                     rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::APTransfer &&
                     !rawdraw_ui_manager_->IsApTransferModeRunning()) {
-                    ESP_LOGI(kTag, "WiFi connected while config page is visible, returning to gallery");
-                    rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
+                    ESP_LOGI(kTag, "WiFi connected while config page is visible, returning to home");
+                    rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Home);
                 }
                 UpdateStatusBarForUi();
                 ArmSyncSleepTimer();
@@ -339,8 +341,8 @@ void Application::Initialize() {
                 if (rawdraw_ui_manager_ &&
                     rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::APTransfer &&
                     !rawdraw_ui_manager_->IsApTransferModeRunning()) {
-                    ESP_LOGI(kTag, "WiFi config AP exited, returning to gallery");
-                    rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
+                    ESP_LOGI(kTag, "WiFi config AP exited, returning to home");
+                    rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Home);
                 }
                 wifi_connected_.store(WifiManager::GetInstance().IsConnected(),
                                       std::memory_order_release);
@@ -382,10 +384,10 @@ void Application::OnDownClick() {
 void Application::OnUpLongPress() {
     ESP_LOGI(kTag, "UP long press");
     NoteButtonActivity();
-    if (rawdraw_ui_manager_ &&
-        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings) {
-        ESP_LOGI(kTag, "UP long press - leaving settings");
-        rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
+    // Page navigation is done from the Home page (BOOT long press returns there);
+    // UP/DOWN long press belong to the active page (e.g. Settings jump to top/bottom).
+    if (rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kUpLongPress});
     }
 }
 
@@ -393,8 +395,7 @@ void Application::OnDownLongPress() {
     ESP_LOGI(kTag, "DOWN long press");
     NoteButtonActivity();
     if (rawdraw_ui_manager_) {
-        ESP_LOGI(kTag, "DOWN long press - entering settings");
-        rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Settings);
+        rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kDownLongPress});
     }
 }
 
@@ -418,7 +419,7 @@ void Application::OnBootLongPress() {
     if (WifiManager::GetInstance().IsConfigMode()) {
         ESP_LOGI(kTag, "BOOT long press - exiting WiFi config AP");
         if (rawdraw_ui_manager_) {
-            rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
+            rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Home);
         }
         WifiManager::GetInstance().StartStation();
         return;
