@@ -2,9 +2,16 @@
 #include "lvgl.h"
 #include "esp_timer.h"
 
-static int64_t g_now_us = 1000000;
-int64_t esp_timer_get_time(void) { return g_now_us; }
-void sim_advance_time_us(int64_t us) { g_now_us += us; }
+#include <time.h>
+
+/* Monotonic host clock plus an offset tests can advance (e.g. to age out timers). */
+static int64_t g_offset_us = 1000000;
+int64_t esp_timer_get_time(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000 + g_offset_us;
+}
+void sim_advance_time_us(int64_t us) { g_offset_us += us; }
 
 static uint32_t glyph_id_for(const lv_font_fmt_txt_dsc_t* fdsc, uint32_t letter) {
     if (letter == 0) return 0;

@@ -7,24 +7,39 @@ BUILD   := build
 PAGE    ?= gallery
 KEYS    ?=
 
-DEFS := -DBUILTIN_TEXT_FONT=SourceHanSansSC_Regular_slim -DBUILTIN_ICON_FONT=font_zectrix_16_1
-INC := -Ishim -I$(MAIN) -I$(MAIN)/rawdraw -I$(MAIN)/rawdraw/components -I$(MAIN)/ui/renderers/rawdraw
+# cJSON is an ESP-IDF managed component that is not vendored here; fetch a pinned release once.
+CJSON_TAG := v1.7.18
+CJSON_DIR := $(BUILD)/cjson-src
+
+DEFS := -DBUILTIN_TEXT_FONT=SourceHanSansSC_Regular_slim -DBUILTIN_ICON_FONT=font_zectrix_16_1 -DPROJECT_VER=\"6.5.9\"
+INC := -Ishim -I$(CJSON_DIR) -I$(MAIN) -I$(MAIN)/rawdraw -I$(MAIN)/rawdraw/components -I$(MAIN)/ui/renderers/rawdraw
 CXXFLAGS := -std=c++17 -O1 -g $(INC) -Wno-attributes $(DEFS)
 CFLAGS   := -O1 $(INC)
 
 CXX_SRCS := $(wildcard $(MAIN)/rawdraw/*.cc) \
             $(filter-out %/calendar.cc,$(wildcard $(MAIN)/rawdraw/components/*.cc)) \
             $(addprefix $(MAIN)/ui/renderers/rawdraw/,photo_gallery.cc photo_detail_renderer.cc weather_renderer.cc weather_detail_renderer.cc) \
-            fake/photo_storage.cc fake/weather_api.cc sim_main.cc
-C_SRCS   := $(filter-out %/cbin_font.c,$(wildcard $(FONTS)/*.c $(FONTS)/*/*.c)) sim_platform.c
+            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc) \
+            $(MAIN)/ui/app_registry.cc $(MAIN)/ui/app_shell.cc \
+            $(MAIN)/ui/renderers/rawdraw/ap_transfer_renderer.cc \
+            $(MAIN)/ui/renderers/rawdraw/ap_transfer_server.cc \
+            fake/photo_storage.cc fake/weather_api.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
+C_SRCS   := $(filter-out %/cbin_font.c,$(wildcard $(FONTS)/*.c $(FONTS)/*/*.c)) sim_platform.c $(CJSON_DIR)/cJSON.c
 
 OBJS := $(patsubst %,$(BUILD)/%.o,$(notdir $(CXX_SRCS) $(C_SRCS)))
 vpath %.cc $(sort $(dir $(CXX_SRCS)))
 vpath %.c  $(sort $(dir $(C_SRCS)))
+LIBOBJS := $(filter-out $(BUILD)/sim_main.cc.o $(BUILD)/sim_device.cc.o,$(OBJS))
 
-all: $(BUILD)/sim_main
-$(BUILD)/sim_main: $(OBJS)
-	$(CXX) $^ -o $@
+all: $(BUILD)/sim_main $(BUILD)/sim_device
+$(BUILD)/sim_main: $(LIBOBJS) $(BUILD)/sim_main.cc.o
+	$(CXX) $^ -o $@ -lpthread
+$(BUILD)/sim_device: $(LIBOBJS) $(BUILD)/sim_device.cc.o
+	$(CXX) $^ -o $@ -lpthread
+$(OBJS): | $(CJSON_DIR)/cJSON.c
+$(CJSON_DIR)/cJSON.c:
+	mkdir -p $(BUILD)
+	git clone -q --depth 1 --branch $(CJSON_TAG) https://github.com/DaveGamble/cJSON.git $(CJSON_DIR)
 $(BUILD)/%.cc.o: %.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) -MMD -c $< -o $@
 $(BUILD)/%.c.o: %.c | $(BUILD)
@@ -37,7 +52,17 @@ run: all
 	$(BUILD)/sim_main --page $(PAGE) --out out $(if $(KEYS),--keys $(KEYS)) | tee out/.last
 	python3 -I tools/fb2png.py 400 300 $$(grep '\.fb$$' out/.last)
 
+# Type-check firmware files the simulator cannot link (they need real ESP-IDF hardware headers).
+# Uses the stubs in check/ and the shims in shim/. This is a safety net, not a build.
+check-firmware: | $(CJSON_DIR)/cJSON.c
+	$(CXX) -std=c++17 -fsyntax-only -Icheck $(CXXFLAGS) $(MAIN)/ui/rawdraw_ui_manager.cc
+	@echo "check-firmware: rawdraw_ui_manager.cc OK (application.cc is not covered)"
+
+test: all
+	python3 tests/test_navigation.py -v
+	@command -v node >/dev/null && node tests/test_buttons.js || echo "node not found: skipped tests/test_buttons.js"
+
 clean:
 	rm -rf $(BUILD) out
 -include $(wildcard $(BUILD)/*.d)
-.PHONY: all run clean
+.PHONY: all run test check-firmware clean

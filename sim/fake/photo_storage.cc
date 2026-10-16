@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,8 @@ struct Stored {
     std::vector<uint8_t> data;
 };
 std::vector<Stored> g_photos;
+// The HTTP server thread and the render thread both touch the album.
+std::mutex g_mutex;
 
 Stored* Find(const char* id) {
     if (!id) return nullptr;
@@ -26,6 +29,7 @@ Stored* Find(const char* id) {
 int photo_storage_init(void) { return 0; }
 
 int photo_save(const PhotoInfo* info, const uint8_t* data) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     if (!info || !data) return -1;
     Stored* existing = Find(info->id);
     Stored entry;
@@ -40,6 +44,7 @@ int photo_save(const PhotoInfo* info, const uint8_t* data) {
 }
 
 int photo_load(const char* id, uint8_t* out, uint32_t max_size) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     Stored* p = Find(id);
     if (!p || !out) return -1;
     const uint32_t n = std::min<uint32_t>(max_size, static_cast<uint32_t>(p->data.size()));
@@ -48,12 +53,14 @@ int photo_load(const char* id, uint8_t* out, uint32_t max_size) {
 }
 
 int photo_list(PhotoInfo* out, int max_count) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     const int n = std::min<int>(max_count, static_cast<int>(g_photos.size()));
     for (int i = 0; i < n; ++i) out[i] = g_photos[i].info;
     return n;
 }
 
 int photo_delete(const char* id) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     for (auto it = g_photos.begin(); it != g_photos.end(); ++it) {
         if (strcmp(it->info.id, id) == 0) {
             g_photos.erase(it);
@@ -63,17 +70,25 @@ int photo_delete(const char* id) {
     return -1;
 }
 
-int photo_get_count(void) { return static_cast<int>(g_photos.size()); }
+int photo_get_count(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return static_cast<int>(g_photos.size());
+}
 
 int photo_get_by_index(int index, PhotoInfo* out) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     if (index < 0 || index >= static_cast<int>(g_photos.size()) || !out) return -1;
     *out = g_photos[index].info;
     return 0;
 }
 
-bool photo_exists(const char* id) { return Find(id) != nullptr; }
+bool photo_exists(const char* id) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return Find(id) != nullptr;
+}
 
 int photo_update_info(const char* id, const PhotoInfo* updates) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     Stored* p = Find(id);
     if (!p || !updates) return -1;
     strncpy(p->info.title, updates->title, sizeof(p->info.title) - 1);
@@ -84,6 +99,7 @@ int photo_update_info(const char* id, const PhotoInfo* updates) {
 }
 
 int photo_move(const char* id, int delta) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     for (size_t i = 0; i < g_photos.size(); ++i) {
         if (strcmp(g_photos[i].info.id, id) != 0) continue;
         const long j = static_cast<long>(i) + delta;

@@ -34,70 +34,73 @@
     </div>
   </div>
   <div class="side">
-    <p><label>页面 <select id="page"></select></label>
-       <button class="small" id="reset">重置</button></p>
+    <p>当前页面：<b id="curpage">-</b>　<button class="small" id="reset">重启（回首页）</button></p>
+    <p><label>调试：直接跳转 <select id="page"></select></label></p>
+    <p class="hint">设备上传服务（固件真实的传图页面和接口）：<br>
+       <a id="devlink" target="_blank">打开</a>　上传的照片会直接出现在相册里</p>
     <div id="err"></div>
     <p class="hint">
-      单击：短按<br>
-      双击：快速连按两次（间隔 &lt; 300ms）<br>
-      长按：按住 ≥ 600ms<br>
+      单击：短按松开<br>
+      长按：按住 ≥ 1000ms（与真机一致）。真机没有双击，所以这里也没有<br>
+      同时按住 UP 和 DOWN 1 秒：配网（和真机一致）<br>
+      长按 BOOT：从任何页面回到首页<br>
       键盘：↑ ↓ 对应 UP / DOWN，Enter 或 B 对应 BOOT，按住同样算长按
     </p>
     <div id="log"></div>
   </div>
 </div>
 <script>
-const LONG_MS = 600, DOUBLE_MS = 300;
+const LONG_MS = 1000;  // kNavLongPressMs in the board file. The device has no double-click, so neither does this.
 const pageSel = document.getElementById('page');
 const img = document.getElementById('screen');
 const log = document.getElementById('log');
 const err = document.getElementById('err');
-let keys = [];
+const curPage = document.getElementById('curpage');
 let busy = Promise.resolve();
+let count = 0;
 
-async function loadPages() {
-  const pages = await (await fetch('/pages')).json();
-  pages.forEach(p => pageSel.add(new Option(p, p)));
-}
-
-function refresh() {
-  // Serialise requests so rapid presses never render out of order.
+// The device keeps its own state; every request must reach it exactly once and in order.
+function send(path, label) {
   busy = busy.then(async () => {
-    const url = `/frame?page=${pageSel.value}&keys=${keys.join(',')}&t=${Date.now()}`;
-    const r = await fetch(url);
+    const r = await fetch(path + (path.includes('?') ? '&' : '?') + 't=' + Date.now());
     if (!r.ok) { err.textContent = await r.text(); return; }
     err.textContent = '';
-    const consumed = r.headers.get('X-Consumed');
     img.src = URL.createObjectURL(await r.blob());
-    if (keys.length) {
-      const note = consumed === '0' ? '  (页面未处理该按键)' : '';
-      log.textContent += `${keys.length}. ${keys[keys.length - 1]}${note}\n`;
+    curPage.textContent = r.headers.get('X-Page');
+    pageSel.value = r.headers.get('X-Page');
+    if (label) {
+      const note = r.headers.get('X-Consumed') === '0' ? '  (页面未处理该按键)' : '';
+      log.textContent += `${++count}. ${label}${note}\n`;
       log.scrollTop = log.scrollHeight;
     }
   });
 }
+function press(name) { send('/key?name=' + name, name); }
 
-function press(name) { keys.push(name); refresh(); }
-
-// Turns raw down/up edges of one physical button into click / double / long events.
+// Turns raw down/up edges of one physical button into click / long-press events.
+const held = { up: false, down: false, boot: false };
+let chordFired = false;
 function makeButton(base, el) {
-  let downAt = 0, pendingClick = null, longTimer = null, isDown = false;
+  let longTimer = null, longFired = false;
   function down() {
-    if (isDown) return;           // ignore key auto-repeat
-    isDown = true; downAt = Date.now(); el.classList.add('down');
+    if (held[base]) return;                       // ignore key auto-repeat
+    held[base] = true; longFired = false; el.classList.add('down');
+    if (!held.up || !held.down) chordFired = false;
     longTimer = setTimeout(() => {
-      longTimer = null; pendingClick = null; press(base + 'long');
+      longTimer = null; longFired = true;
+      if (base !== 'boot' && held.up && held.down) {   // UP+DOWN held together
+        if (!chordFired) { chordFired = true; press('updownlong'); }
+      } else if (!(base !== 'boot' && chordFired)) {
+        press(base + 'long');
+      }
     }, LONG_MS);
   }
   function up() {
-    if (!isDown) return;
-    isDown = false; el.classList.remove('down');
-    if (longTimer === null) return;   // long press already fired
-    clearTimeout(longTimer); longTimer = null;
-    if (pendingClick) {               // second short press inside the window
-      clearTimeout(pendingClick); pendingClick = null; press(base + '2');
-    } else {
-      pendingClick = setTimeout(() => { pendingClick = null; press(base); }, DOUBLE_MS);
+    if (!held[base]) return;
+    held[base] = false; el.classList.remove('down');
+    if (longTimer !== null) {                     // released before the long-press threshold: a click
+      clearTimeout(longTimer); longTimer = null;
+      if (!chordFired) press(base);
     }
   }
   el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); down(); });
@@ -121,10 +124,14 @@ addEventListener('keyup', e => {
   e.preventDefault(); buttons[keyMap[e.key]].up();
 });
 
-function reset() { keys = []; log.textContent = ''; refresh(); }
-pageSel.addEventListener('change', () => { pageSel.blur(); reset(); });
-document.getElementById('reset').addEventListener('click', e => { e.target.blur(); reset(); });
-loadPages().then(reset);
+function resetLog() { log.textContent = ''; count = 0; }
+pageSel.addEventListener('change', () => { const p = pageSel.value; pageSel.blur(); send('/jump?page=' + p, 'jump ' + p); });
+document.getElementById('reset').addEventListener('click', e => { e.target.blur(); resetLog(); send('/reset'); });
+fetch('/config').then(r => r.json()).then(c => {
+  document.getElementById('devlink').href = `http://127.0.0.1:${c.device_port}/`;
+  c.pages.forEach(p => pageSel.add(new Option(p, p)));
+  send('/reset');
+});
 </script>
 </body>
 </html>
