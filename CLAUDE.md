@@ -5,8 +5,9 @@ The Python server described in README.md is **not in this repo** (only `server/m
 The firmware here has no WebSocket/voice client; it ships a Home page that launches the photo gallery,
 weather, settings and the two hotspot pages, plus a LAN/AP HTTP upload service.
 
-The dev machine cannot reach the device and has no ESP-IDF. Debug on the PC simulator in `sim/`;
-the user builds and flashes the firmware elsewhere. User-facing behavior is documented in
+The dev machine cannot reach the device. Debug on the PC simulator in `sim/`. ESP-IDF v6.0.0 is installed
+here (see "Building the firmware"), so `.bin` files are built here, published for download (see "Publishing a
+build"), and flashed by the user on another machine. Nothing has been run on a real device yet. User-facing behavior is documented in
 `user_manual.md`: keep it in sync when adding pages, buttons, apps or settings entries.
 
 ## App navigation (shared between firmware and simulator)
@@ -79,9 +80,9 @@ Not compiled into the sim at all: `RawDrawUiManager`, `application.cc`, board co
    API in a file the sim compiles, add the minimal shim in `sim/shim/` (or sim_httpd/sim_platform)
    instead of ifdef-ing the firmware file. Do not add `#ifdef SIM` to firmware sources.
 4. **Host build passing is not device build passing.** Xtensa gcc, real IDF headers and warning flags
-   differ. Tell the user to run `idf.py build` (or `firmware/build.sh`) after a batch of changes;
-   do not claim a change "works on the device" from sim results alone. New firmware `.cc` files must also
-   be added to `firmware/main/CMakeLists.txt`.
+   differ. Run `firmware/scripts/build_local.sh` after a batch of changes (see "Building the firmware");
+   do not claim a change "works on the device" from sim or build results alone. New firmware `.cc` files must
+   also be added to `firmware/main/CMakeLists.txt`.
 5. Separate pure logic/rendering from hardware calls and put hardware behind a thin interface, so the
    logic is shared and the sim supplies a fake for the hardware side. Apply this to new apps.
 6. When reporting results, say which part was verified in the sim and which still needs real hardware.
@@ -115,6 +116,70 @@ python3 sim/web/server.py                     # web UI http://127.0.0.1:8000, de
 - Make flags are not dependencies: run `make -C sim clean` after changing `DEFS`/`INC` in the Makefile.
 - Do not use `pkill -f`/`pgrep -f` with a pattern that appears in your own command line (it kills the
   shell). Use the `[x]` trick (`pgrep -af "[w]eb/server.py"`) and kill by pid.
+
+## Building the firmware (.bin)
+
+The target device (Zectrix Note 4C: ESP32-S3, 16 MB flash, 8 MB PSRAM, 4.2" 400x300 four-color) is the
+`zectrix-s3-epaper-4.2` board in this repo. This machine has ESP-IDF installed (built here, flashed elsewhere):
+
+```bash
+firmware/scripts/build_local.sh            # incremental; add --clean for a from-scratch build
+# -> firmware/releases/v<PROJECT_VER>_zectrix-s3-epaper-4.2/  (gitignored)
+#      merged-binary.bin     full image, flash at 0x0
+#      app-only_xiaozhi.bin  app only, flash at 0x20000 (keeps NVS/settings)
+#      SHA256SUMS, BUILD_INFO.txt
+```
+
+- **ESP-IDF must be v6.0.0** (`~/esp/esp-idf`, tag `v6.0`), the version recorded in `firmware/dependencies.lock`.
+  v6.0.3 fails: the locked `esp_cam_sensor` (an unused leftover dependency) calls SPI internals that changed in
+  a 6.0.x patch release. The script refuses to run on a different version (`FORCE=1` overrides). Do not "fix"
+  it by removing dependencies from `idf_component.yml`.
+- `build.sh` and `scripts/release.py` cannot be used: they need `main/boards/zectrix-s3-epaper-4.2/config.json`,
+  which this repo does not ship (and `build.sh` also syncs into a `../main/manager-next` that does not exist
+  here). `build_local.sh` reproduces what `release.py` does: `set-target esp32s3`, append
+  `CONFIG_BOARD_TYPE_ZECTRIX_S3_EPAPER_4_2=y`, `idf.py build`, `idf.py merge-bin`.
+- Environment details the script handles: system Python first in `PATH` (a project venv earlier in `PATH`
+  breaks IDF's own Python env); a private libusb (`~/esp/libusb-pkg/extracted/...`, via `LD_LIBRARY_PATH`)
+  because `export.sh` insists on openocd, which needs `libusb-1.0` and there is no root here.
+- Tools live in `~/.espressif`. If the install is lost: `git clone --depth 1 --branch v6.0 --recursive
+  --shallow-submodules https://github.com/espressif/esp-idf.git ~/esp/esp-idf`, then with the system Python
+  `python3 tools/idf_tools.py install xtensa-esp-elf riscv32-esp-elf esp32ulp-elf xtensa-esp-elf-gdb cmake ninja
+  esp-rom-elfs openocd-esp32` (set `LD_LIBRARY_PATH` to a libusb extracted with `apt-get download
+  libusb-1.0-0 && dpkg -x`) and `python3 tools/idf_tools.py install-python-env`. `install.sh` alone aborts at
+  openocd and leaves CMake/Ninja/the Python env uninstalled.
+- The first build downloads the managed components from components.espressif.com into `firmware/managed_components/`
+  (gitignored) and compiles ~2500 objects. `build/`, `sdkconfig`, `managed_components/` are all untracked;
+  `dependencies.lock` **is** tracked, and the script warns if the build changed it (it should not with v6.0.0).
+- The image does not include the 8 MB `assets` SPIFFS partition (0x800000, photo storage).
+- Flash command (device must be in download mode; the procedure is not documented anywhere I found):
+  `python -m esptool --chip esp32s3 -b 460800 write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m 0x0 merged-binary.bin`
+- A successful build proves it compiles and links; nothing has been flashed or run on a real device.
+
+## Publishing a build for download (Alibaba Cloud nginx)
+
+The user downloads the `.bin` on another machine, so publish it with:
+
+```bash
+firmware/scripts/upload_firmware.sh        # uploads the newest firmware/releases/v*/merged-binary.bin
+```
+
+- Result: `/var/www/aifin/firmware/merged-binary_<YYYYMMDD-HHMM>.bin` plus `<name>.sha256`, linked as
+  `https://<domain>/fin/firmware/<name>`. **Put files directly in `/fin/firmware/`, no random sub-directories**
+  (user decision). The timestamp is the file's mtime (when `merge-bin` produced it) in **UTC**; the script never
+  overwrites an existing file, so a link that was handed out keeps pointing at the same bytes.
+- Server, key and directory are **not** stored in this repo (it is pushed to GitHub). The script reads them from
+  `~/workspace/aifin/sync_reports_to_cloud.sh`; the setup is documented in `~/workspace/aifin/CLAUDE.md`
+  ("云端部署"). The same host serves the aifin weekly reports and a Flask app: only ever add files under
+  `/var/www/aifin/firmware/`, never edit the nginx config (`/fin/` already aliases `/var/www/aifin/`,
+  `autoindex off`), and never touch `index.html`/`report/` (aifin's sync script owns them and `--delete`s there).
+- **This dev machine cannot download the public link**: its network's web filter answers 403 "Access Denied"
+  (category "Finance;Suspicious") for the domain, even for aifin's existing pages. Do not try to get around it.
+  The script instead verifies on the server through nginx (loopback + `Host` header) and compares SHA-256.
+- The site's TLS certificate expired on 2026-04-04, so browsers warn and `curl` needs `-k`. Always give the user
+  the SHA-256 in the chat message, and tell them to verify the download against it.
+- Everything published is world-readable (no auth). Delete a build only when asked, naming the exact file:
+  `ssh -i ~/.ssh/aifin_deploy <host> 'rm -- /var/www/aifin/firmware/<name>.bin /var/www/aifin/firmware/<name>.bin.sha256'`.
+- Report the link, the SHA-256, and that it was verified on the server (not from the public internet).
 
 ## Known firmware issues (found by reading code; not fixed, not verified on hardware)
 
