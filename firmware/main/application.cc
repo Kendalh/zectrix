@@ -25,10 +25,9 @@ constexpr char kSyncNamespace[] = "sync";
 constexpr char kSyncIntervalKey[] = "sync_interval";
 constexpr char kGalleryNamespace[] = "gallery";
 constexpr char kSlideshowIntervalKey[] = "slide_min";
-constexpr int kSettingsSlideshowIndex = 3;
-constexpr int kSettingsWifiIndex = 5;
-constexpr int kSettingsHttpServerIndex = 6;
-constexpr int kSettingsLanIpIndex = 7;
+constexpr int kSettingsWifiIndex = 3;
+constexpr int kSettingsHttpServerIndex = 4;
+constexpr int kSettingsLanIpIndex = 5;
 
 std::string FormatMinutesLabel(int minutes) {
     if (minutes <= 0) return "关闭";
@@ -39,16 +38,6 @@ std::string FormatMinutesLabel(int minutes) {
 
 const char* FormatMinutesLogLabel(int minutes) {
     return minutes <= 0 ? "关闭" : "开启";
-}
-
-int NextSlideshowInterval(int current) {
-    static constexpr int kOptions[] = {0, 5, 10, 30};
-    for (size_t i = 0; i < sizeof(kOptions) / sizeof(kOptions[0]); ++i) {
-        if (kOptions[i] == current) {
-            return kOptions[(i + 1) % (sizeof(kOptions) / sizeof(kOptions[0]))];
-        }
-    }
-    return 5;
 }
 
 void UpdateWifiSettingsItem(rawdraw::SettingsRenderer* renderer, bool connected,
@@ -187,27 +176,6 @@ void Application::Initialize() {
         items.push_back({"系统", "", nullptr, rawdraw::SettingsItemType::Section, false});
         items.push_back({"重启", "执行", nullptr, rawdraw::SettingsItemType::Action, false,
                          []() { esp_restart(); }});
-        items.push_back({"相册", "", nullptr, rawdraw::SettingsItemType::Section, false});
-        items.push_back({"轮播间隔", FormatMinutesLabel(slideshow_interval), nullptr,
-                         rawdraw::SettingsItemType::Action, false,
-                         [this, sr]() {
-                             Settings nvs(kGalleryNamespace, true);
-                             const int current = nvs.GetInt(kSlideshowIntervalKey, 5);
-                             const int next = NextSlideshowInterval(current);
-                             nvs.SetInt(kSlideshowIntervalKey, next);
-                             if (rawdraw_ui_manager_) {
-                                 rawdraw_ui_manager_->SetGallerySlideshowIntervalMinutes(next);
-                             }
-                             if (next > 0 && sleep_timer_ != nullptr) {
-                                 esp_timer_stop(sleep_timer_);
-                                 ESP_LOGI(kTag, "Sync sleep timer paused while gallery slideshow is enabled");
-                             } else if (next <= 0 &&
-                                        (wifi_connected_.load(std::memory_order_acquire) ||
-                                         WifiManager::GetInstance().IsConnected())) {
-                                 ArmSyncSleepTimer();
-                             }
-                             sr->UpdateItem(kSettingsSlideshowIndex, FormatMinutesLabel(next));
-                         }});
         items.push_back({"网络", "", nullptr, rawdraw::SettingsItemType::Section, false});
         items.push_back({"Wi-Fi", "未连接", nullptr, rawdraw::SettingsItemType::Checkbox, false,
                          [this, sr]() {

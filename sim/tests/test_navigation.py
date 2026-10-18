@@ -59,14 +59,14 @@ class NavigationTest(unittest.TestCase):
         page, _, _ = self.dev.cmd("reset")
         self.assertEqual(page, "home")
 
-    # App order: 相册, 天气, 语音, AI 问答, 传图, 配网, 设置
+    # App order: 相册, 天气, 语音, AI 问答, 配网, 设置
     def open_app(self, index):
         for _ in range(index):
             self.dev.keys("down")
         return self.dev.keys("boot")
 
     def test_each_app_opens_and_boot_long_returns_home(self):
-        expected = ["gallery", "weather", "voice", "ai_chat", "ap_transfer", "ap_transfer", "settings"]
+        expected = ["gallery", "weather", "voice", "ai_chat", "ap_transfer", "settings"]
         for index, page in enumerate(expected):
             with self.subTest(app=index):
                 self.assertEqual(self.open_app(index), page)
@@ -76,10 +76,10 @@ class NavigationTest(unittest.TestCase):
 
     def test_home_scrolls_to_apps_beyond_the_fifth(self):
         home = self.dev.cmd("reset")[2]
-        for _ in range(6):
+        for _ in range(5):
             self.dev.keys("down")
         self.assertNotEqual(self.dev.cmd("screen")[2], home)  # the list scrolled
-        self.assertEqual(self.dev.keys("boot"), "settings")  # 7th app
+        self.assertEqual(self.dev.keys("boot"), "settings")  # 6th app
 
     def test_selection_wraps(self):
         self.assertEqual(self.dev.keys("up", "boot"), "settings")  # last entry: 设置

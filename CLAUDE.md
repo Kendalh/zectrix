@@ -148,8 +148,8 @@ python3 sim/web/server.py                     # web UI http://127.0.0.1:8000, de
   `/weather` weather settings (`/api/weather`, `/api/weather/search`). New apps: add a card in `web_apps.cc`.
 - `sim_device` runs the real `ApTransferServer` in LAN mode and keeps the album in memory
   (cleared on restart). The device HTTP API is documented in `docs/LAN_PHOTO_PUSH_API.md`. In the sim,
-  "传图"/"配网" only show their instruction pages (no hotspot), so the device's conflict between the LAN
-  service and AP mode is not reproduced.
+  "配网" only shows its instruction page (no hotspot). The "传图" app was removed from Home (the web UI covers it);
+  `AppAction::StartApTransfer` and `APTransfer` page code remain for the Wi-Fi config page.
 - Renderer `Init()` resets its state: feed data **after** `Init()`.
 - Make flags are not dependencies: run `make -C sim clean` after changing `DEFS`/`INC` in the Makefile.
 - Do not use `pkill -f`/`pgrep -f` with a pattern that appears in your own command line (it kills the
@@ -221,9 +221,8 @@ firmware/scripts/upload_firmware.sh        # uploads the newest firmware/release
 
 ## Known firmware issues (found by reading code; not fixed, not verified on hardware)
 
-- With the LAN service running (it auto-starts after Wi-Fi connects), opening the "传图" app shows hotspot
-  instructions but `ApTransferServer::Start()` returns early ("already running"), and long-press BOOT then
-  stops the LAN service via `StopApTransferMode()`. Pre-existing; the Home page made the entry more visible.
+- The Home page no longer has a "传图" (hotspot upload) entry; the Wi-Fi config page still uses `ApTransferServer`
+  (`StopApTransferMode()` also stops the LAN service when leaving it).
 
 ## Known unresolved rendering oddities (sim output, cause unknown: shim vs firmware)
 

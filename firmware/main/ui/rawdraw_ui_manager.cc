@@ -328,9 +328,6 @@ RawDrawUiManager::RawDrawUiManager()
     });
     ap_transfer_server_->SetSettingsChangedCallback([this](int slideshow_interval_minutes) {
         SetGallerySlideshowIntervalMinutes(slideshow_interval_minutes);
-        UpdateSettingsItem(3, slideshow_interval_minutes <= 0
-            ? std::string("关闭")
-            : std::to_string(slideshow_interval_minutes) + "min");
         RequestActivePageRefresh();
     });
     ap_transfer_server_->SetPhotosChangedCallback([this]() {
@@ -775,7 +772,7 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
     }
     const bool cursor_click =
         (current_page_ == RawDrawPageId::Home || current_page_ == RawDrawPageId::Gallery ||
-         current_page_ == RawDrawPageId::Voice) &&
+         current_page_ == RawDrawPageId::Voice || current_page_ == RawDrawPageId::Settings) &&
         (event.type == rawdraw::ButtonEvent::kUpClick || event.type == rawdraw::ButtonEvent::kDownClick);
     if (navigation_click && !cursor_click && input_refresh_locked_.load(std::memory_order_acquire)) {
         const int64_t held_ms = esp_timer_get_time() / 1000 - input_lock_since_ms_.load(std::memory_order_acquire);

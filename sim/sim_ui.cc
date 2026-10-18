@@ -10,12 +10,10 @@ using ui::RawDrawPageId;
 
 namespace {
 // Indices into the settings list built by BuildSettingsItems() (same as application.cc).
-constexpr int kSettingsSlideshowIndex = 3;
-constexpr int kSettingsWifiIndex = 5;
-constexpr int kSettingsHttpServerIndex = 6;
-constexpr int kSettingsLanIpIndex = 7;
+constexpr int kSettingsWifiIndex = 3;
+constexpr int kSettingsHttpServerIndex = 4;
+constexpr int kSettingsLanIpIndex = 5;
 
-std::string MinutesLabel(int minutes) { return minutes <= 0 ? "关闭" : std::to_string(minutes) + "min"; }
 }  // namespace
 
 SimUi::SimUi(const Options& options)
@@ -222,7 +220,6 @@ bool SimUi::ShowPhoto(const std::string& photo_id) {
 void SimUi::OnSlideshowChanged(int minutes) {
     std::lock_guard<std::recursive_mutex> lock(mu_);
     slideshow_minutes_ = minutes;
-    settings_.UpdateItem(kSettingsSlideshowIndex, MinutesLabel(minutes));
 }
 
 // Mirrors the settings list built in Application (application.cc). Keep labels and order in sync.
@@ -232,18 +229,6 @@ void SimUi::BuildSettingsItems() {
     std::vector<SettingsItemDef> items;
     items.push_back({"系统", "", nullptr, SettingsItemType::Section, false});
     items.push_back({"重启", "执行", nullptr, SettingsItemType::Action, false, [this]() { Reboot(); }});
-    items.push_back({"相册", "", nullptr, SettingsItemType::Section, false});
-    items.push_back({"轮播间隔", MinutesLabel(slideshow_minutes_), nullptr, SettingsItemType::Action, false,
-                     [this]() {
-                         static const int kOptions[] = {0, 5, 10, 30};
-                         for (size_t i = 0; i < 4; ++i) {
-                             if (kOptions[i] == slideshow_minutes_) {
-                                 slideshow_minutes_ = kOptions[(i + 1) % 4];
-                                 break;
-                             }
-                         }
-                         settings_.UpdateItem(kSettingsSlideshowIndex, MinutesLabel(slideshow_minutes_));
-                     }});
     items.push_back({"网络", "", nullptr, SettingsItemType::Section, false});
     items.push_back({"Wi-Fi", "已连接", nullptr, SettingsItemType::Checkbox, true,
                      [this]() { settings_.UpdateItem(kSettingsWifiIndex, "(模拟)"); }});
