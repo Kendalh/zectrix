@@ -21,6 +21,8 @@ const std::vector<AppEntry>& GetApps() {
          AppAction::OpenPage, RawDrawPageId::Weather},
         {"voice", "语音", "录音与播放", FA_SETTINGS_VOLUME, &fa_settings_16,
          AppAction::OpenPage, RawDrawPageId::Voice},
+        {"ai_chat", "AI 问答", "千问对话", FA_SETTINGS_COMMENT, &fa_settings_16,
+         AppAction::OpenPage, RawDrawPageId::AiChat},
         {"transfer", "传图", "热点传照片", FA_SETTINGS_SYNC, &fa_settings_16,
          AppAction::StartApTransfer, RawDrawPageId::APTransfer},
         {"wifi_config", "配网", "配置 Wi-Fi", FA_SETTINGS_WIFI, &fa_settings_16,

@@ -141,6 +141,7 @@ void EspVoiceBackend::SaveTask() {
     const int samples = recorded_samples_.load();
     const int duration_ms = samples * 1000 / kSampleRate;
     bool changed = true;
+    bool claimed = false;
     if (duration_ms < kMinRecordingMs) {
         changed = false;  // nothing new to show: skip the slow panel refresh
         ESP_LOGI(kTag, "Recording too short (%d ms), discarded", duration_ms);
@@ -163,6 +164,7 @@ void EspVoiceBackend::SaveTask() {
         if (ok && store_->Commit(&final_path)) {
             ESP_LOGI(kTag, "Saved %s (%d ms)", final_path.c_str(), duration_ms);
             Beep(kStopBeepHz, 0);
+            claimed = NotifySaved(final_path);  // the AI app takes (and deletes) its own recording
         } else {
             ESP_LOGE(kTag, "Failed to save the recording");
             remove(tmp.c_str());
@@ -178,7 +180,7 @@ void EspVoiceBackend::SaveTask() {
     SleepManager::GetInstance().Release("voice");
     SetState(BackendState::Idle);
     task_running_ = false;
-    if (changed) NotifyChanged();
+    if (changed && !claimed) NotifyChanged();
 }
 
 bool EspVoiceBackend::StartPlayback(const std::string& path) {

@@ -28,7 +28,8 @@ SIM = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SIM / "tools"))
 import fb2png  # noqa: E402
 
-PAGES = ["home", "gallery", "weather", "weather_detail", "photo_detail", "settings", "ap_transfer", "voice"]
+PAGES = ["home", "gallery", "weather", "weather_detail", "photo_detail", "settings", "ap_transfer", "voice", "ai_chat"]
+MIC_FILE = "/tmp/zectrix_sim_mic.wav"  # keep in sync with kMicFile in fake/voice_backend_fake.cc
 KEYS = {"up", "down", "boot", "uplong", "downlong", "bootlong", "updownlong", "uplongrelease"}
 W, H = 400, 300
 
@@ -115,6 +116,17 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps({"device_port": DEVICE.http_port, "pages": PAGES}).encode()
             return self._send(200, body, "application/json")
         self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):
+        # Browser microphone: a 16 kHz mono WAV recorded while UP is held. The fake recorder picks it up when the
+        # recording ends (see fake/voice_backend_fake.cc, kMicFile).
+        if urlparse(self.path).path != "/voice":
+            return self._send(404, b"not found", "text/plain")
+        n = int(self.headers.get("Content-Length", "0"))
+        if n <= 0 or n > 8 * 1024 * 1024:
+            return self._send(400, b"bad size", "text/plain")
+        Path(MIC_FILE).write_bytes(self.rfile.read(n))
+        self._send(200, b"ok", "text/plain")
 
     def log_message(self, *args):
         pass

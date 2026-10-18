@@ -13,6 +13,7 @@
   .btn { width: 110px; padding: 14px 0; border-radius: 10px; border: 2px solid #444; background: #fff;
          font-size: 16px; cursor: pointer; user-select: none; touch-action: none; }
   .btn:active, .btn.down { background: #ffd600; }
+  .btn.rec { background: #ff5252; }  /* microphone open (the device blinks its LED) */
   .btn small { display: block; font-size: 11px; color: #666; margin-top: 3px; }
   .side { min-width: 260px; max-width: 340px; }
   select, button.small { font-size: 14px; padding: 6px 10px; margin-right: 6px; }
@@ -65,7 +66,9 @@ function send(path, label) {
     const r = await fetch(path + (path.includes('?') ? '&' : '?') + 't=' + Date.now());
     if (!r.ok) { err.textContent = await r.text(); return; }
     err.textContent = '';
-    img.src = URL.createObjectURL(await r.blob());
+    const blob = await r.blob();
+    img.src = URL.createObjectURL(blob);
+    shownPng = null;  // the next poll redraws once; harmless
     curPage.textContent = r.headers.get('X-Page');
     pageSel.value = r.headers.get('X-Page');
     if (label) {
@@ -76,6 +79,64 @@ function send(path, label) {
   });
 }
 function press(name) { send('/key?name=' + name, name); }
+
+// Browser microphone for the Voice and AI pages: records while UP is held (after the long press), 16 kHz mono WAV.
+const mic = { ctx: null, stream: null, node: null, chunks: [] };
+function beep(hz) {  // like the device's start/stop tone
+  const c = new AudioContext(), o = c.createOscillator(), g = c.createGain();
+  o.frequency.value = hz; g.gain.value = 0.1; o.connect(g); g.connect(c.destination);
+  o.start(); o.stop(c.currentTime + 0.15); setTimeout(() => c.close(), 400);
+}
+async function micStart() {
+  try {
+    mic.chunks = [];
+    mic.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mic.ctx = new AudioContext({ sampleRate: 16000 });
+    const src = mic.ctx.createMediaStreamSource(mic.stream);
+    mic.node = mic.ctx.createScriptProcessor(4096, 1, 1);
+    mic.node.onaudioprocess = e => mic.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(mic.node); mic.node.connect(mic.ctx.destination);
+    document.getElementById('b-up').classList.add('rec'); beep(1200);
+  } catch (e) { mic.stream = null; err.textContent = '麦克风不可用: ' + e.message + '（将使用静音）'; }
+}
+async function micStopAndUpload() {
+  document.getElementById('b-up').classList.remove('rec');
+  if (!mic.stream) return;
+  beep(700);
+  mic.node.disconnect(); mic.stream.getTracks().forEach(t => t.stop());
+  const rate = mic.ctx.sampleRate; await mic.ctx.close(); mic.stream = null;
+  let total = 0; for (const c of mic.chunks) total += c.length;
+  const buf = new ArrayBuffer(44 + total * 2), v = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + total * 2, true); str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, total * 2, true);
+  let o = 44;
+  for (const c of mic.chunks) for (let i = 0; i < c.length; i++, o += 2) {
+    v.setInt16(o, Math.max(-1, Math.min(1, c[i])) * 0x7fff, true);
+  }
+  await fetch('/voice', { method: 'POST', body: buf });
+}
+
+// The device refreshes its panel by itself when an answer arrives, but this page only draws on request: also re-read the
+// screen every 2 s (queued behind key presses) and redraw when it changed. Needed after a spoken question.
+let shownPng = null;
+async function refreshIfChanged() {
+  try {
+    const r = await fetch('/screen?t=' + Date.now());
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const key = bytes.length + ':' + bytes.reduce((h, b) => (h * 31 + b) | 0, 7);
+    if (key === shownPng) return;
+    shownPng = key;
+    img.src = URL.createObjectURL(blob);
+    curPage.textContent = r.headers.get('X-Page');
+    pageSel.value = r.headers.get('X-Page');
+  } catch (e) { /* the server may be restarting */ }
+}
+setInterval(() => { busy = busy.then(refreshIfChanged); }, 2000);
 
 // Turns raw down/up edges of one physical button into click / long-press events.
 const held = { up: false, down: false, boot: false };
@@ -92,6 +153,7 @@ function makeButton(base, el) {
         if (!chordFired) { chordFired = true; press('updownlong'); }
       } else if (!(base !== 'boot' && chordFired)) {
         press(base + 'long');
+        if (base === 'up') micStart();
       }
     }, LONG_MS);
   }
@@ -102,6 +164,7 @@ function makeButton(base, el) {
       clearTimeout(longTimer); longTimer = null;
       if (!chordFired) press(base);
     } else if (longFired && base === 'up' && !chordFired) {
+      busy = busy.then(micStopAndUpload);          // the WAV must be on the server before the recording ends
       press('uplongrelease');                     // Voice app: releasing UP ends the recording
     }
   }

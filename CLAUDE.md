@@ -1,7 +1,7 @@
 # Project notes for Claude
 
 ESP32-S3 4.2" four-color (BWRY) e-ink device. Firmware lives in `firmware/` (ESP-IDF, RawDraw UI).
-The Python server described in README.md is **not in this repo** (only `server/mock_client.py`).
+There is no Python server in this repo (only `server/mock_client.py`, an old protocol debug script).
 The firmware here has no WebSocket/voice client; it ships a Home page that launches the photo gallery,
 weather, settings and the two hotspot pages, plus a LAN/AP HTTP upload service.
 
@@ -38,6 +38,28 @@ Voice app (`RawDrawPageId::Voice`): `ui/renderers/rawdraw/voice_renderer.*` (sha
 UP `OnPressUp` -> `Application::OnUpLongRelease` (web sim key `uplongrelease`). `RawDrawUiManager::SwitchPage` and
 `SimUi::SwitchPage` call `VoiceRenderer::OnLeave()` when leaving the page. Not run on hardware.
 
+AI Q&A app (`RawDrawPageId::AiChat`, Alibaba Bailian/DashScope Qwen, non-streaming, **voice input only**): logic is in
+`common/ai_chat.{h,cc}` (`ai::ChatService` singleton: sessions, per-session context trimmed to `kMaxContextChars`, one request in
+flight, failed questions are dropped from the context; pure helpers `BuildRequestJson`/`ParseResponse`/`TrimHistory`/
+`SpeechBodyParts`/`IsUsableTranscript`/`Base64Encode`, unit-tested by `sim/tests/test_ai_chat.cc`). One API key and one endpoint
+(`dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`) serve both models: chat `qwen-flash`, speech `qwen3-asr-flash`
+(an `input_audio` part with a base64 `data:audio/wav` URL; the transcript is the assistant `content`; silence comes back as a lone
+"嗯。", which `IsUsableTranscript` rejects). Input: hold UP = `kUpLongPress` starts the Voice app's `VoiceBackend`, release
+(`kUpLongRelease`) stops it; the backend's `SetOnSaved` hook hands the WAV to `AiChatRenderer::OnRecordingSaved` (claims it, so it
+never reaches the Voice list) and `ChatService::AskVoice` sends it for recognition, then the text is asked like a question.
+Sessions are managed on the device (BOOT = session list, DOWN long = new/delete); the web page `/ai` (`web_apps.cc`,
+`/api/ai/key|state`) only stores the key, there is deliberately no web question input. Hardware sits behind `ai::ChatPlatform` (one
+generic `Send(HttpRequest)` with an optional `body_file` that the platform turns into prefix+base64+suffix via `ai::BuildFileBody`
+on its own task, because the voice save task has a 4 KB stack, plus key storage): firmware `common/ai_chat_platform_esp.cc` (one
+short task per request, 10 KB stack, 90 s timeout, key in NVS namespace `aichat` slot `bl_key`), sim
+`sim/fake/ai_chat_platform_fake.cc` (system `curl`, key from `DASHSCOPE_API_KEY`; `SIM_AI_FAKE=1` = canned transcript/answers,
+`SIM_AI_SPEECH_TEXT` overrides the transcript; `SIM_VOICE_WAV=file.wav` makes the fake recorder "record" that file). The sim_device
+command `aistate` dumps the sessions for tests. `AiChatRenderer::NeedsRefreshAfterChange()` suppresses the panel refresh while a
+question is pending (15 s refresh, no "thinking" screen). `AiChatRenderer::OnLeave()` runs from
+`RawDrawUiManager::SwitchPage`/`SimUi::SwitchPage`. `Application` wires `voice_backend_->SetOnSaved`,
+`RawDrawUiManager::StartAiChatService()` is called on Wi-Fi connect. The key is never in the source or repo. Verified against the
+real Bailian endpoint from the sim (TTS speech -> ASR -> chat); the device-side TLS/NVS/memory path was never run on hardware.
+
 Gotchas found while building this (keep in mind for new pages):
 - Entering a page runs the renderer's `Init()`, which resets it (gallery: card mode, first photo). Anything
   that "selects then switches" is broken; switch first, then select (see `ShowPhotoById`).
@@ -54,7 +76,8 @@ firmware file into `sim/`.
 Shared (compiled unmodified, fixes apply to both):
 - `firmware/main/rawdraw/*` and `rawdraw/components/*` (except `calendar.cc`, needs `holiday_fetcher.h`)
 - renderers: `home_renderer`, `photo_gallery`, `photo_detail_renderer`, `weather_renderer`,
-  `weather_detail_renderer`, `settings_renderer`, `ap_transfer_renderer`
+  `weather_detail_renderer`, `settings_renderer`, `ap_transfer_renderer`, `voice_renderer`, `ai_chat_renderer`
+- `common/ai_chat.cc`, `common/weather_parse.cc`, `common/voice_recordings.cc`
 - `ui/app_registry.cc`, `ui/app_shell.cc`
 - `ui/renderers/rawdraw/ap_transfer_server.cc` (upload/album HTTP API and embedded HTML)
 - `components/78__xiaozhi-fonts/src/*.c` (fonts, except `cbin_font.c`)
@@ -67,6 +90,7 @@ Replaced in the simulator (firmware changes here are NOT exercised by `sim/`):
 | `sim/sim_ui.cc` `BuildSettingsItems()` | settings list built in `application.cc` | real Wi-Fi/LAN/sleep actions; **keep labels and order in sync** |
 | `sim/fake/photo_storage.cc` (in memory) | `common/photo_storage.cc` (SPIFFS + index) | capacity, index corruption, power loss |
 | `sim/fake/weather_api_fake.cc` (canned sample, built-in city table) | `common/weather_api.cc` (Open-Meteo HTTPS, task, NVS config) | network, TLS, NVS persistence, config loading |
+| `sim/fake/ai_chat_platform_fake.cc` (`curl` or canned replies, key in memory) | `common/ai_chat_platform_esp.cc` (esp_http_client TLS, NVS key) | TLS, NVS, task stack, 90 s timeout on a real network |
 | `sim/sim_httpd.cc` (POSIX sockets) | ESP-IDF `esp_http_server` | timeouts, memory, real concurrency |
 | `sim/sim_platform.c` font lookup | LVGL `lv_font_fmt_txt` | kerning is ignored, so spacing may differ by a few px |
 | `sim/shim/*` (esp_log, esp_timer, freertos, wifi, netif, sleep, settings, wifi_manager, gpio) | real IDF and hardware | Wi-Fi/AP, DHCP, NVS, deep sleep, buttons, e-ink refresh |

@@ -43,13 +43,22 @@ public:
     /** Called (from any thread) whenever State() changes without a UI action, e.g. playback ended. */
     void SetOnChanged(std::function<void()> cb) { on_changed_ = std::move(cb); }
 
+    /**
+     * Called on the saving thread right after a recording was committed, with the new file's path. Return true
+     * to claim it (the AI app transcribes and deletes it): the Voice page is then not asked to redraw.
+     */
+    void SetOnSaved(std::function<bool(const std::string&)> cb) { on_saved_ = std::move(cb); }
+
 protected:
     void NotifyChanged() {
         if (on_changed_) on_changed_();
     }
+    /** @return true when a listener claimed the file. */
+    bool NotifySaved(const std::string& path) { return on_saved_ && on_saved_(path); }
 
 private:
     std::function<void()> on_changed_;
+    std::function<bool(const std::string&)> on_saved_;
 };
 
 }  // namespace voice

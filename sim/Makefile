@@ -19,12 +19,12 @@ CFLAGS   := -O1 $(INC)
 CXX_SRCS := $(wildcard $(MAIN)/rawdraw/*.cc) \
             $(filter-out %/calendar.cc,$(wildcard $(MAIN)/rawdraw/components/*.cc)) \
             $(addprefix $(MAIN)/ui/renderers/rawdraw/,photo_gallery.cc photo_detail_renderer.cc weather_renderer.cc weather_detail_renderer.cc) \
-            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc voice_renderer.cc) \
+            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc voice_renderer.cc ai_chat_renderer.cc) \
             $(MAIN)/ui/app_registry.cc $(MAIN)/ui/app_shell.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_renderer.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_server.cc \
-            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc $(MAIN)/common/voice_recordings.cc \
-            fake/voice_backend_fake.cc fake/photo_storage.cc fake/weather_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
+            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc $(MAIN)/common/voice_recordings.cc $(MAIN)/common/ai_chat.cc \
+            fake/ai_chat_platform_fake.cc fake/voice_backend_fake.cc fake/photo_storage.cc fake/weather_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
 C_SRCS   := $(filter-out %/cbin_font.c,$(wildcard $(FONTS)/*.c $(FONTS)/*/*.c)) sim_platform.c $(CJSON_DIR)/cJSON.c
 
 OBJS := $(patsubst %,$(BUILD)/%.o,$(notdir $(CXX_SRCS) $(C_SRCS)))
@@ -64,8 +64,12 @@ check-firmware: | $(CJSON_DIR)/cJSON.c
 $(BUILD)/test_weather_parse: tests/test_weather_parse.cc $(LIBOBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
 
-test: all $(BUILD)/test_weather_parse
+$(BUILD)/test_ai_chat: tests/test_ai_chat.cc $(LIBOBJS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
+
+test: all $(BUILD)/test_weather_parse $(BUILD)/test_ai_chat
 	$(BUILD)/test_weather_parse
+	$(BUILD)/test_ai_chat
 	python3 tests/test_navigation.py -v
 	@command -v node >/dev/null && node tests/test_buttons.js || echo "node not found: skipped tests/test_buttons.js"
 

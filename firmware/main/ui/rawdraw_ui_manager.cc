@@ -16,6 +16,7 @@
 #include "components/78__xiaozhi-fonts/include/fa_settings.h"  // for icon macros
 #include "lvgl.h"
 #include "settings.h"
+#include "common/ai_chat_platform_esp.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -222,6 +223,7 @@ const char* RawDrawUiManager::GetPageTitle(RawDrawPageId page) {
         case RawDrawPageId::APTransfer: return "传图模式";
         case RawDrawPageId::Home:     return "首页";
         case RawDrawPageId::Voice:    return "语音";
+        case RawDrawPageId::AiChat:   return "AI 问答";
         default:               return "未知";
     }
 }
@@ -242,6 +244,7 @@ RawDrawUiManager::RawDrawUiManager()
     // Create renderers
     clock_.SetColor(rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::Accent).fg);
     voice_renderer_ = std::make_unique<rawdraw::VoiceRenderer>();
+    ai_chat_renderer_ = std::make_unique<rawdraw::AiChatRenderer>();
     home_renderer_ = std::make_unique<rawdraw::HomeRenderer>();
     home_renderer_->SetLaunchCallback([this](const AppEntry& app) { app_shell_.Launch(app); });
     AppShell::Host shell_host;
@@ -499,6 +502,9 @@ void RawDrawUiManager::SwitchPage(RawDrawPageId page) {
     if (current_page_ == RawDrawPageId::Voice && voice_renderer_) {
         voice_renderer_->OnLeave();
     }
+    if (current_page_ == RawDrawPageId::AiChat && ai_chat_renderer_) {
+        ai_chat_renderer_->OnLeave();
+    }
 
     // Initialize the new page renderer
     InitRenderer(page);
@@ -581,6 +587,7 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::APTransfer: return ap_transfer_renderer_.get();
         case RawDrawPageId::Home:     return home_renderer_.get();
         case RawDrawPageId::Voice:    return voice_renderer_.get();
+        case RawDrawPageId::AiChat:   return ai_chat_renderer_.get();
         default:               return nullptr;
     }
 }
@@ -730,8 +737,22 @@ void RawDrawUiManager::StartWeatherService() {
     });
 }
 
+void RawDrawUiManager::StartAiChatService() {
+    auto& service = ai::ChatService::Get();
+    service.SetOnChange([this]() {
+        // Runs on whichever task changed the conversation (HTTP handler, request task, UI). The renderer
+        // decides: no refresh while a question is pending, the panel is too slow for a "thinking" screen.
+        if (current_page_ == RawDrawPageId::AiChat && ai_chat_renderer_ &&
+            ai_chat_renderer_->NeedsRefreshAfterChange()) {
+            RequestActivePageRefresh();
+        }
+    });
+    service.Start(NewEspChatPlatform());
+}
+
 bool RawDrawUiManager::StartLanHttpServer(const std::string& ip_address) {
     if (!ap_transfer_server_) return false;
+    if (ai_chat_renderer_) ai_chat_renderer_->SetAddress(ip_address);  // shown as the page to open on the AI page
     return ap_transfer_server_->StartLan(ip_address);
 }
 

@@ -165,6 +165,11 @@ void Application::Initialize() {
     if (auto* vr = rawdraw_ui_manager_->GetVoiceRenderer()) {
         vr->SetBackend(voice_backend_.get(), &voice_store_);
     }
+    // AI app: a question can be recorded with the same microphone backend; its file is claimed by the AI page.
+    if (auto* ar = rawdraw_ui_manager_->GetAiChatRenderer()) {
+        ar->SetBackend(voice_backend_.get(), &voice_store_);
+        voice_backend_->SetOnSaved([ar](const std::string& path) { return ar->OnRecordingSaved(path); });
+    }
 
     if (auto* sr = rawdraw_ui_manager_->GetSettingsRenderer()) {
         Settings gallery_nvs(kGalleryNamespace, false);
@@ -303,6 +308,7 @@ void Application::Initialize() {
                 StartSntpClockSyncOnce();
                 if (rawdraw_ui_manager_) {
                     rawdraw_ui_manager_->StartWeatherService();
+                    rawdraw_ui_manager_->StartAiChatService();
                 }
                 if (rawdraw_ui_manager_ && !rawdraw_ui_manager_->IsLanHttpServerRunning()) {
                     const std::string ip = data.empty() ? WifiManager::GetInstance().GetIpAddress() : data;

@@ -8,6 +8,7 @@
 //   key <name>      press a key: up down boot, <name>long for long press, updownlong for the chord
 //   screen          just render the current screen
 //   jump <page>     debug: switch page directly (home gallery weather settings ap_transfer ...)
+//   aistate         debug: AI sessions and the current conversation as a JSON line ("AISTATE {...}")
 //   reset           like a reboot: back to the Home page
 //   quit
 // With --serve there is no command loop; the process just serves HTTP until killed.
@@ -22,6 +23,9 @@
 #include <string>
 #include <vector>
 
+#include <cJSON.h>
+
+#include "common/ai_chat.h"
 #include "sim_fixtures.h"
 #include "sim_ui.h"
 
@@ -95,6 +99,34 @@ int main(int argc, char** argv) {
             ui::RawDrawPageId page;
             if (!SimUi::PageFromName(arg, &page)) printf("ERR unknown page\n");
             else { ui.JumpTo(page); reply_frame(-1); }
+        } else if (cmd == "aistate") {  // debug/test: AI sessions as one JSON line (no screen)
+            auto& svc = ai::ChatService::Get();
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddNumberToObject(root, "current", svc.CurrentSessionId());
+            cJSON* sessions = cJSON_AddArrayToObject(root, "sessions");
+            for (const auto& s : svc.List()) {
+                cJSON* item = cJSON_CreateObject();
+                cJSON_AddNumberToObject(item, "id", s.id);
+                cJSON_AddStringToObject(item, "title", s.title.c_str());
+                cJSON_AddNumberToObject(item, "count", static_cast<double>(s.message_count));
+                cJSON_AddBoolToObject(item, "pending", s.pending);
+                cJSON_AddItemToArray(sessions, item);
+            }
+            ai::Session cur;
+            svc.Snapshot(svc.CurrentSessionId(), &cur);
+            cJSON* messages = cJSON_AddArrayToObject(root, "messages");
+            for (const auto& m : cur.messages) {
+                cJSON* item = cJSON_CreateObject();
+                cJSON_AddStringToObject(item, "role", m.role == ai::Message::User ? "user" : "assistant");
+                cJSON_AddStringToObject(item, "text", m.text.c_str());
+                cJSON_AddItemToArray(messages, item);
+            }
+            cJSON_AddBoolToObject(root, "pending", cur.pending);
+            cJSON_AddStringToObject(root, "error", cur.last_error.c_str());
+            char* text = cJSON_PrintUnformatted(root);
+            printf("AISTATE %s\n", text);
+            cJSON_free(text);
+            cJSON_Delete(root);
         } else if (cmd == "reset") {
             ui.Reboot();
             reply_frame(-1);

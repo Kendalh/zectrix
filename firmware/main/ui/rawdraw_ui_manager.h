@@ -17,6 +17,7 @@
 #include "ui/renderers/rawdraw/page_renderer.h"
 #include "ui/renderers/rawdraw/home_renderer.h"
 #include "ui/renderers/rawdraw/voice_renderer.h"
+#include "ui/renderers/rawdraw/ai_chat_renderer.h"
 #include "ui/renderers/rawdraw/chat_renderer.h"
 #include "ui/renderers/rawdraw/settings_renderer.h"
 #include "ui/renderers/rawdraw/ebook_renderer.h"
@@ -181,6 +182,9 @@ public:
 
     // Start the background weather refresh (idempotent; call once Wi-Fi is connected).
     void StartWeatherService();
+
+    // Start the AI Q&A service (idempotent; call once Wi-Fi is connected).
+    void StartAiChatService();
     void StopLanHttpServer();
 
     /**
@@ -307,6 +311,7 @@ public:
     rawdraw::WifiRenderer* GetWifiRenderer() { return wifi_renderer_.get(); }
     rawdraw::SettingsRenderer* GetSettingsRenderer() { return settings_renderer_.get(); }
     rawdraw::VoiceRenderer* GetVoiceRenderer() { return voice_renderer_.get(); }
+    rawdraw::AiChatRenderer* GetAiChatRenderer() { return ai_chat_renderer_.get(); }
     rawdraw::PhotoGalleryRenderer* GetPhotoGalleryRenderer() { return photo_gallery_renderer_.get(); }
     rawdraw::PhotoDetailRenderer* GetPhotoDetailRenderer() { return photo_detail_renderer_.get(); }
     rawdraw::WeatherRenderer* GetWeatherRenderer() { return weather_renderer_.get(); }
@@ -426,6 +431,7 @@ private:
     // Page renderers (owned)
     std::unique_ptr<rawdraw::HomeRenderer> home_renderer_;
     std::unique_ptr<rawdraw::VoiceRenderer> voice_renderer_;
+    std::unique_ptr<rawdraw::AiChatRenderer> ai_chat_renderer_;
     std::unique_ptr<rawdraw::ChatRenderer> chat_renderer_;
     std::unique_ptr<rawdraw::EbookRenderer> ebook_renderer_;
     std::unique_ptr<rawdraw::WifiRenderer> wifi_renderer_;

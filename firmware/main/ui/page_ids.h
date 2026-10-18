@@ -35,6 +35,7 @@ enum class RawDrawPageId {
     APTransfer = 17,
     Home = 18,
     Voice = 19,
+    AiChat = 20,
     Count,
 };
 

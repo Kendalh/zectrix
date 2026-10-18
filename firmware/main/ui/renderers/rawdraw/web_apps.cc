@@ -5,6 +5,7 @@
 
 #include "web_apps.h"
 
+#include "common/ai_chat.h"
 #include "common/weather_api.h"
 
 #include <cJSON.h>
@@ -40,6 +41,7 @@ const char kHomeHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"
 <div class="top"><div><div class="brand">墨水屏设置</div><div class="muted" id="ep"></div></div></div>
 <a class="panel card" href="/album"><div class="t">相册 · 传图</div><div class="muted">上传照片、填写名字、管理设备相册和轮播周期</div></a>
 <a class="panel card" href="/weather"><div class="t">天气</div><div class="muted" id="wsum">管理最多 5 个城市和刷新频率</div></a>
+<a class="panel card" href="/ai"><div class="t">AI 问答 · Key 设置</div><div class="muted">填写阿里云百炼的 API Key（提问在设备上用语音完成）</div></a>
 </main><script>
 fetch('/status').then(r=>r.json()).then(j=>{document.getElementById('ep').textContent=j.ip}).catch(()=>{});
 fetch('/api/weather').then(r=>r.json()).then(j=>{document.getElementById('wsum').textContent=j.cities[j.selected].name+' · 共 '+j.cities.length+' 个城市 · '+j.interval+' 分钟刷新'}).catch(()=>{});
@@ -87,6 +89,20 @@ $('save').onclick=async()=>{const iv=+document.querySelector('input[name=iv]:che
 load();
 </script></body></html>)HTML";
 
+const char kAiHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>AI 问答设置</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>%STYLE%</style></head><body><main class="app">
+<div class="top"><div><div class="brand">AI 问答设置</div><div class="muted">提问和管理会话都在设备上：进入"AI 问答"，长按 UP 说话</div></div><a class="btn secondary" href="/" style="text-decoration:none">首页</a></div>
+<section class="panel"><b>阿里云百炼 API Key</b> <span class="muted" id="keyst"></span><div class="muted" style="margin:4px 0 8px">同一个 Key 同时用于语音识别（Qwen3-ASR）和回答（Qwen-Flash）。保存在设备上，不会再显示出来。</div>
+<div class="row"><input type="text" id="key" placeholder="sk-..." autocomplete="off"><button class="btn yellow" id="savekey">保存</button></div></section>
+<div id="msg" class="muted"></div>
+</main><script>
+const $=id=>document.getElementById(id);
+async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);return r.json()}
+async function load(){try{const j=await api('/api/ai/state');$('keyst').textContent=j.hasKey?'（已设置）':'（未设置）'}catch(e){$('msg').textContent='读取失败（设备离线？）'}}
+$('savekey').onclick=async()=>{const j=await api('/api/ai/key',{key:$('key').value});if(j.success){$('key').value='';$('msg').textContent='Key 已保存'}else $('msg').textContent=j.error||'Key 无效';load()};
+load();
+</script></body></html>)HTML";
+
 void CloseSession(httpd_req_t* req) {
     if (!req || !req->handle) return;
     const int sockfd = httpd_req_to_sockfd(req);
@@ -128,8 +144,8 @@ esp_err_t SendError(httpd_req_t* req, const char* code) {
     return SendJsonTree(req, root);
 }
 
-cJSON* ReadBody(httpd_req_t* req) {
-    if (req->content_len == 0 || req->content_len > 2048) return nullptr;
+cJSON* ReadBody(httpd_req_t* req, size_t max_len = 2048) {
+    if (req->content_len == 0 || req->content_len > max_len) return nullptr;
     std::string buf(req->content_len, '\0');
     size_t got = 0;
     while (got < req->content_len) {
@@ -242,6 +258,34 @@ esp_err_t WeatherSearchHandler(httpd_req_t* req) {
         cJSON_AddStringToObject(item, "lon", c.lon.c_str());
         cJSON_AddItemToArray(list, item);
     }
+    return SendJsonTree(req, root);
+}
+
+// ---- AI Q&A -------------------------------------------------------------------------------------
+
+esp_err_t AiPageHandler(httpd_req_t* req) { return SendPage(req, kAiHtml); }
+
+esp_err_t AiStateHandler(httpd_req_t* req) {
+    auto& service = ai::ChatService::Get();
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddBoolToObject(root, "started", service.Started());
+    cJSON_AddBoolToObject(root, "hasKey", service.HasApiKey());  // the key itself is never sent back
+    return SendJsonTree(req, root);
+}
+
+esp_err_t AiKeyHandler(httpd_req_t* req) {
+    cJSON* body = ReadBody(req);
+    if (!body) return SendError(req, "bad_json");
+    cJSON* key = cJSON_GetObjectItemCaseSensitive(body, "key");
+    const std::string value = cJSON_IsString(key) ? key->valuestring : "";
+    cJSON_Delete(body);
+    auto& service = ai::ChatService::Get();
+    if (!service.SetApiKey(value)) {
+        return SendError(req, "Key 无效，或设备尚未联网");
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
     return SendJsonTree(req, root);
 }
 

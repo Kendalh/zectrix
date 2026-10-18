@@ -439,7 +439,7 @@ bool ApTransferServer::StartAccessPoint() {
 
 bool ApTransferServer::StartHttpServer() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 32;
     config.stack_size = 10240;  // weather search/refresh does a TLS request from a handler
     config.max_open_sockets = 4;
     config.recv_wait_timeout = 30;  // Large images take time
@@ -454,7 +454,7 @@ bool ApTransferServer::StartHttpServer() {
     }
 
     // Register handlers
-    // Home page (app launcher) at "/", the photo app at "/album", weather settings at "/weather".
+    // Home page (app launcher) at "/", the photo app at "/album", weather settings at "/weather", AI Q&A at "/ai".
     const httpd_uri_t page_uris[] = {
         {"/", HTTP_GET, web::HomeHandler, this},
         {"/album", HTTP_GET, IndexHandler, this},
@@ -462,6 +462,9 @@ bool ApTransferServer::StartHttpServer() {
         {"/api/weather", HTTP_GET, web::WeatherConfigHandler, this},
         {"/api/weather", HTTP_POST, web::WeatherConfigHandler, this},
         {"/api/weather/search", HTTP_GET, web::WeatherSearchHandler, this},
+        {"/ai", HTTP_GET, web::AiPageHandler, this},
+        {"/api/ai/state", HTTP_GET, web::AiStateHandler, this},
+        {"/api/ai/key", HTTP_POST, web::AiKeyHandler, this},
     };
     for (const auto& uri : page_uris) {
         if (httpd_register_uri_handler(server_, &uri) != ESP_OK) return false;

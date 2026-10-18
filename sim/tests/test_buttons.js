@@ -22,6 +22,7 @@ global.document = { getElementById: el };
 global.addEventListener = (type, fn) => { (handlers.window = handlers.window || {})[type] = fn; };
 global.setTimeout = (fn, ms) => { const id = nextId++; timers.push({ id, at: now + ms, fn }); return id; };
 global.clearTimeout = id => { timers = timers.filter(t => t.id !== id); };
+global.setInterval = () => 0;  // the page's background screen poll is not under test
 Date.now = () => now;
 global.URL = { createObjectURL: () => 'blob:x' };
 global.Option = function (a, b) { return { a, b }; };

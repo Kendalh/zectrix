@@ -1,199 +1,86 @@
 # Youn Ink Four Color
 
-这是一个面向 ESP32-S3 墨水屏设备的个人 AI 助手项目。当前主线由三部分组成：ESP32 固件、Python 后端服务、以及图片/待办/设备管理页面。
+ZecTrix ESP32-S3 4.2 英寸四色（黑/白/红/黄）墨水屏设备的固件，附一个可以在电脑上运行的模拟器。屏幕 400×300，三个按键：UP、DOWN、BOOT。
 
-项目重点不是一个通用 npm 包，而是一套可以真实运行在墨水屏设备上的系统：语音对话、TTS 播放、待办同步、天气/新闻/日历/电子书/相册页面、AP 传图、OTA 固件管理，以及适配四色屏的 RawDraw UI。
+设备开机进入**首页**（应用列表），UP/DOWN 选择，BOOT 打开，**长按 BOOT 回首页**。内置应用：
 
-## 2BP 四色图像链路
+| 应用 | 说明 |
+| --- | --- |
+| 相册 | 浏览照片；通过设备网页或局域网接口上传（2bpp 四色 BWRY / 1bpp 黑白） |
+| 天气 | Open-Meteo 天气预报，最多 5 个城市，在设备网页 `/weather` 里设置 |
+| 语音 | 长按 UP 录音，松开保存；列表、播放、删除 |
+| AI 问答 | 长按 UP 说话提问，答案一次性显示；多会话、记住上下文、联网搜索（阿里云百炼） |
+| 传图 / 配网 | 设备热点传照片、Wi-Fi 配置页 |
+| 设置 | Wi-Fi、局域网服务、亮度/睡眠等 |
 
-![Youn Ink Four Color 2BP BWRY architecture](README-2bp-architecture.png)
+每个页面怎么操作、按键含义、已知限制，见 **[user_manual.md](user_manual.md)**。
 
-相册图片可由 PC/NAS 管理端或设备 AP 页面进入服务端，转换为 `2BP BWRY`（黑、白、红、黄）后通过 Wi-Fi 推送到 ESP32-S3 四色墨水屏。本仓库的 2BP 四色链路与 NOTE4 的 4BP 黑白灰阶相册独立维护：面板颜色、像素格式和刷新驱动均不同。
+![2BP BWRY architecture](README-2bp-architecture.png)
 
-## 当前状态
-
-- 后端已经切换为 `server/` 下的 Python 服务，根目录旧 Node `scripts/` 已删除。
-- 固件主界面使用 RawDraw 渲染，默认按四色屏设计，同时保留 1bpp 黑白屏兼容。
-- 主题暂时只保留一个默认视觉方向：偏任天堂感的四色主题，强调红、黄、黑、白的语义使用。
-- 图片传输支持 1bpp 黑白与 2bpp 四色 BWRY 两种格式。
-- 根目录 `.gitignore` 已排除构建产物、日志、pid、数据库、本地配置和密钥文件。
+> 本仓库的四色 `2BP BWRY` 链路与 4BP 黑白灰阶相册独立维护：面板颜色、像素格式和刷新驱动均不同。
 
 ## 目录结构
 
 ```text
 .
-├── firmware/        ESP32-IDF 固件，RawDraw UI、页面渲染、屏幕驱动、AP 传图
-├── server/          Python 后端，WebSocket 对话、TTS、Discovery、图片推送、OTA API
-├── frontend/        管理前端源码，使用独立的 package/pnpm 工作流
-├── docs/            历史设计文档和实现记录
-├── documents/       项目资料
-└── package.json     仅保留仓库级辅助命令，不再作为旧 Node 服务入口
+├── firmware/        ESP-IDF 固件：RawDraw UI、页面渲染、屏幕驱动、局域网/AP HTTP 服务
+│   ├── main/        固件源码（模拟器也直接编译这里的文件）
+│   └── scripts/     build_local.sh（编译）、upload_firmware.sh（发布下载）
+├── sim/             PC 模拟器：网页界面 + 设备真实的 HTTP 上传服务 + 自动化测试
+├── server/          mock_client.py（旧的对话协议调试脚本，固件当前不用）
+├── docs/            局域网传图接口（LAN_PHOTO_PUSH_API.md）等
+├── user_manual.md   用户手册
+└── CLAUDE.md        开发约定：共享代码、模拟器与固件的差异、编译发布流程
 ```
 
-注意：`firmware/scripts/` 和 `frontend/scripts/` 仍然有用，分别属于固件工具和前端工具；删除的是根目录历史遗留的 `scripts/`。
+## AI 问答
 
-## 后端服务
+- 全程语音输入：按住 UP 说话，松开发送。录音先交给语音识别 `qwen3-asr-flash`，识别出的文字再发给 `qwen-flash`（已开启百炼内置联网搜索），都走 `dashscope.aliyuncs.com` 的兼容接口，**一个 API Key 通用**。
+- 答案等全部生成后**只刷新一次屏幕**（墨水屏刷新慢，不显示"思考中"）。录音时指示灯闪烁、有提示音。
+- 会话在设备上管理：BOOT 打开会话列表，长按 UP 新建、长按 DOWN 删除。会话只存在内存，重启后清空。
+- API Key 不编进固件：烧录后在浏览器打开 `http://设备IP/ai` 填入，保存在设备 NVS 里。
+- 逻辑在 `firmware/main/common/ai_chat.*`（与硬件无关，模拟器共用），设备端网络和 Key 存储在 `ai_chat_platform_esp.cc`。
 
-后端入口是 `server/llmserve.py`，推荐通过 `server/start.sh` 管理。服务默认端口：
-
-| 端口 | 协议 | 用途 |
-| --- | --- | --- |
-| `9001` | WebSocket | ESP32 语音、LLM、TTS、同步消息 |
-| `8766` | UDP | 设备发现 |
-| `8766` | HTTP | 图片推送、设备图片管理、OTA API |
-| `8090` | HTTP | 独立管理服务，可选 |
-
-### 安装依赖
+## 在电脑上体验（模拟器）
 
 ```bash
-cd server
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+make -C sim                       # 编译（首次会下载 cJSON）
+make -C sim test                  # 导航/AI 问答等自动化测试
+python3 sim/web/server.py         # 网页 http://127.0.0.1:8000 ，设备上传服务 http://127.0.0.1:8080
 ```
 
-### 启动服务
+- 网页上用鼠标或键盘 ↑ ↓ Enter 模拟按键；长按 ↑ 会打开浏览器麦克风，可以真的对着电脑说话提问。
+- AI 问答默认没有 Key：启动前设置 `DASHSCOPE_API_KEY=你的百炼Key` 才会调用真实接口；设置 `SIM_AI_FAKE=1` 则使用内置的模拟回答。
+- 模拟器没有 Wi-Fi、屏幕刷新、状态栏等硬件相关部分，这些只能在真机上验证，详见 `CLAUDE.md`。
+
+## 编译和烧录固件
+
+需要 **ESP-IDF v6.0.0**（其他版本，如 6.0.3，会编译失败）。
 
 ```bash
-export DASHSCOPE_API_KEY=你的百炼APIKey
-cd server
-./start.sh start
+firmware/scripts/build_local.sh              # 增量编译，加 --clean 完全重编
+# 产物在 firmware/releases/v<版本>_zectrix-s3-epaper-4.2/
+#   merged-binary.bin     完整镜像，烧录地址 0x0
+#   app-only_xiaozhi.bin  仅应用，烧录地址 0x20000（保留设置）
+firmware/scripts/upload_firmware.sh          # 可选：发布到自己的服务器供下载
 ```
 
-常用命令：
+烧录（设备需处于下载模式）：
 
 ```bash
-cd server
-./start.sh status
-./start.sh logs
-./start.sh restart
-./start.sh stop
+python -m esptool --chip esp32s3 -b 460800 write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m 0x0 merged-binary.bin
 ```
 
-也可以从仓库根目录调用：
+- 默认面板为四色 BWRY（`ZECTRIX_EPD_PANEL_4COLOR_SSD2683`），也保留 1bpp 黑白屏配置，需在 `idf.py menuconfig` 中切换后重编。
+- 编译细节（环境、依赖、发布脚本配置）见 `CLAUDE.md` 的 "Building the firmware" 和 "Publishing a build"。
+- `upload_firmware.sh` 的服务器信息不在仓库里，从环境变量读取（`REMOTE_HOST`、`SSH_KEY`、`REMOTE_DIR`、`URL_BASE`）。
 
-```bash
-npm run server:start
-npm run server:status
-npm run server:logs
-```
+## 当前状态
 
-### 本地模拟设备
+- 固件完整编译通过；首页、按键导航、各应用在模拟器里有自动化测试。
+- AI 问答的请求和响应在电脑上用真实的百炼接口验证过（语音识别 + 联网对话）；设备端的 HTTPS、NVS 保存 Key、整段录音上传（约 1.3 MB 请求体）的内存占用，以真机运行为准。
+- 设备按键驱动不产生双击事件，所以依赖双击的功能（照片删除对话框、快速切换浮层）在设备上用不了。
 
-```bash
-cd server
-python3 mock_client.py --server ws://127.0.0.1:9001
-```
+## 不要提交
 
-## 图片和设备管理
-
-图片 HTTP API 由 `server/push_image.py` 挂到 `8766` 端口。它支持：
-
-- 上传图片文件并转换后推送到设备。
-- 选择 `1bpp` 黑白格式或 `2bpp` 四色 BWRY 格式。
-- 查询设备图片列表。
-- 删除设备图片。
-- 上传固件并提供 OTA 下载。
-
-常用接口：
-
-```bash
-curl http://localhost:8766/api/status
-curl http://localhost:8766/api/images
-```
-
-上传图片示例：
-
-```bash
-curl -X POST http://localhost:8766/api/upload_image \
-  -F "image=@/path/to/photo.jpg" \
-  -F "format=bwry2bpp" \
-  -F "title=照片标题"
-```
-
-设备进入 AP 传图模式后，手机连接设备热点并访问：
-
-```text
-http://192.168.4.1
-```
-
-## 固件
-
-固件位于 `firmware/`，基于 ESP-IDF。默认面向 ZecTrix ESP32-S3 4.2 寸墨水屏，支持四色 BWRY 屏，也保留 1bpp 黑白屏配置。
-
-### 编译
-
-```bash
-cd firmware
-source ~/Documents/esp/v6.0/esp-idf/export.sh
-idf.py build
-```
-
-根目录辅助命令：
-
-```bash
-npm run firmware:build
-```
-
-### 屏幕配置
-
-固件 Kconfig 中有屏幕类型选择：
-
-```text
-ZECTRIX_EPD_PANEL_4COLOR_SSD2683  四色 BWRY 屏
-ZECTRIX_EPD_PANEL_1BPP            黑白 1bpp 屏
-```
-
-如果要刷回旧黑白屏，先在 `idf.py menuconfig` 中切到 `1bpp black/white EPD`，再重新构建烧录。RawDraw 主题层会把红/黄语义色降级成黑白可读样式。
-
-## UI 说明
-
-固件 UI 目前走 RawDraw 组件体系，重点页面包括：
-
-- 对话：显示用户语音、识别状态、AI 回复。
-- 待办：本地展示、服务端同步、完成/删除/编辑。
-- 设置：音量、亮度、主题、网络、同步、OTA 等。
-- 相册：缩略图列表、大图展示、AP 传图入口。
-- 天气/天气详情、新闻、黄历、年度进度、日历、电子书、日志。
-- 快速切换 Overlay：用于页面间快速跳转。
-
-四色屏主题层通过语义样式绘制组件，不建议在业务页面里继续新增裸 `RED/YELLOW/BLACK/WHITE`。新增 UI 时优先使用 RawDraw 组件和 theme token。
-
-## 环境变量
-
-常用后端环境变量：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `DASHSCOPE_API_KEY` | 无 | 百炼 API Key，启动后端必需 |
-| `LISTEN_HOST` | `0.0.0.0` | WebSocket 监听地址 |
-| `LISTEN_PORT` | `9001` | WebSocket 端口 |
-| `DISCOVERY_PORT` | `8766` | UDP 发现端口 |
-| `PUSH_IMAGE_PORT` | `8766` | 图片/OTA HTTP API 端口 |
-| `TTS_WS_CHUNK_BYTES` | `8000` | TTS 推送分片大小 |
-| `TTS_WS_CHUNK_GAP_SEC` | `0.01` | TTS 分片发送间隔 |
-
-不要提交 `.env`、数据库、日志、pid、构建目录和固件产物。
-
-## Git 提交范围
-
-建议提交：
-
-- `firmware/main/`、`firmware/components/`、`firmware/partitions/` 等固件源码。
-- `server/*.py`、`server/static/`、`server/requirements.txt`、`server/DEPLOY.md`。
-- `frontend/src/`、`frontend/package.json`、`frontend/pnpm-lock.yaml` 等前端源码。
-- 根目录 README、文档、配置模板。
-
-不要提交：
-
-- `firmware/build/`
-- `firmware/managed_components/`
-- `firmware/sdkconfig`
-- `firmware/releases/`
-- `server/.env`
-- `server/todo.db`
-- `server/*.pid`
-- `server/*.log`
-- `frontend/.env*`
-- `frontend/dist/`
-- `node_modules/`
+构建产物 `firmware/build/`、`firmware/managed_components/`、`firmware/sdkconfig`、`firmware/releases/`、`sim/build/`，以及任何 `.env`、日志、密钥。**API Key 绝不写进源码或仓库。**

@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "common/ai_chat.h"
+#include "fake/ai_chat_platform_fake.h"
 #include "sim_fixtures.h"
 
 using ui::RawDrawPageId;
@@ -19,6 +21,9 @@ std::string MinutesLabel(int minutes) { return minutes <= 0 ? "关闭" : std::to
 SimUi::SimUi(const Options& options)
     : options_(options), voice_store_(options.voice_dir), voice_backend_(&voice_store_) {
     voice_.SetBackend(&voice_backend_, &voice_store_);
+    // Same wiring as Application: the AI page claims the recordings it asked for.
+    ai_chat_.SetBackend(&voice_backend_, &voice_store_);
+    voice_backend_.SetOnSaved([this](const std::string& path) { return ai_chat_.OnRecordingSaved(path); });
     home_.SetLaunchCallback([this](const ui::AppEntry& app) { shell_.Launch(app); });
 
     ui::AppShell::Host host;
@@ -37,6 +42,9 @@ SimUi::SimUi(const Options& options)
         weather_.Update(data);
         weather_detail_.Update(data);
     });
+    // Same as RawDrawUiManager::StartAiChatService(); the sim has no panel refresh, so no on-change hook.
+    ai_chat_.SetAddress(options_.lan_address);
+    ai::ChatService::Get().Start(NewSimChatPlatform());
     // The device fetches once Wi-Fi is up; the simulator only does so when asked to preview the layout.
     if (options_.demo_weather) weather_api_fetch_now();
 }
@@ -51,6 +59,7 @@ const char* SimUi::PageName(RawDrawPageId page) {
         case RawDrawPageId::Settings: return "settings";
         case RawDrawPageId::APTransfer: return "ap_transfer";
         case RawDrawPageId::Voice: return "voice";
+        case RawDrawPageId::AiChat: return "ai_chat";
         default: return "unknown";
     }
 }
@@ -58,7 +67,8 @@ const char* SimUi::PageName(RawDrawPageId page) {
 bool SimUi::PageFromName(const std::string& name, RawDrawPageId* page) {
     for (RawDrawPageId p : {RawDrawPageId::Home, RawDrawPageId::Gallery, RawDrawPageId::PhotoDetail,
                             RawDrawPageId::Weather, RawDrawPageId::WeatherDetail,
-                            RawDrawPageId::Settings, RawDrawPageId::APTransfer, RawDrawPageId::Voice}) {
+                            RawDrawPageId::Settings, RawDrawPageId::APTransfer, RawDrawPageId::Voice,
+                            RawDrawPageId::AiChat}) {
         if (name == PageName(p)) {
             *page = p;
             return true;
@@ -77,6 +87,7 @@ rawdraw::PageRenderer* SimUi::RendererFor(RawDrawPageId page) {
         case RawDrawPageId::Settings: return &settings_;
         case RawDrawPageId::APTransfer: return &ap_;
         case RawDrawPageId::Voice: return &voice_;
+        case RawDrawPageId::AiChat: return &ai_chat_;
         default: return nullptr;
     }
 }
@@ -90,6 +101,7 @@ RawDrawPageId SimUi::CurrentPage() {
 void SimUi::SwitchPage(RawDrawPageId page) {
     if (page == current_) return;
     if (current_ == RawDrawPageId::Voice) voice_.OnLeave();  // as RawDrawUiManager::SwitchPage
+    if (current_ == RawDrawPageId::AiChat) ai_chat_.OnLeave();
     if (auto* r = RendererFor(page)) {
         r->Init(sim::kW, sim::kH);
         r->MarkFullRefresh();
