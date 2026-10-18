@@ -157,6 +157,15 @@ void Application::Initialize() {
 
     rawdraw_ui_manager_->SetWifiConfigRequestCallback([this]() { OnWifiConfigComboLongPress(); });
 
+    // Voice app: recordings live next to the photos in SPIFFS.
+    voice_backend_ = std::make_unique<voice::EspVoiceBackend>(&audio_service_, &voice_store_);
+    voice_backend_->SetOnChanged([this]() {
+        if (rawdraw_ui_manager_) rawdraw_ui_manager_->RequestActivePageRefresh();
+    });
+    if (auto* vr = rawdraw_ui_manager_->GetVoiceRenderer()) {
+        vr->SetBackend(voice_backend_.get(), &voice_store_);
+    }
+
     if (auto* sr = rawdraw_ui_manager_->GetSettingsRenderer()) {
         Settings gallery_nvs(kGalleryNamespace, false);
         int slideshow_interval = gallery_nvs.GetInt(kSlideshowIntervalKey, 5);
@@ -386,11 +395,23 @@ void Application::OnDownClick() {
 
 void Application::OnUpLongPress() {
     ESP_LOGI(kTag, "UP long press");
+    if (rawdraw_ui_manager_ && rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Voice) {
+        // Voice app: starts recording; feedback is the LED and a beep, not a (slow) panel refresh.
+        rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kUpLongPress});
+        return;
+    }
     NoteButtonActivity();
     // Page navigation is done from the Home page (BOOT long press returns there);
     // UP/DOWN long press belong to the active page (e.g. Settings jump to top/bottom).
     if (rawdraw_ui_manager_) {
         rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kUpLongPress});
+    }
+}
+
+void Application::OnUpLongRelease() {
+    ESP_LOGI(kTag, "UP long press released");
+    if (rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kUpLongRelease});
     }
 }
 

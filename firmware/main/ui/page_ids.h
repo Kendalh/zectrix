@@ -34,6 +34,7 @@ enum class RawDrawPageId {
     FontMetrics = 16,
     APTransfer = 17,
     Home = 18,
+    Voice = 19,
     Count,
 };
 

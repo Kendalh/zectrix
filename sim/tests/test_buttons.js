@@ -61,6 +61,8 @@ async function keysSent(action) {
   assert.deepStrictEqual(await keysSent(() => { down('b-boot'); advance(1000); up('b-boot'); }), ['bootlong']);
   assert.deepStrictEqual(await keysSent(() => { down('b-down'); advance(1000); up('b-down'); }), ['downlong']);
   assert.deepStrictEqual(await keysSent(() => { down('b-up'); advance(999); up('b-up'); }), ['up']);
+  // UP long press is followed by a release event (Voice app: end of recording)
+  assert.deepStrictEqual(await keysSent(() => { down('b-up'); advance(1000); up('b-up'); }), ['uplong', 'uplongrelease']);
 
   // UP+DOWN held together: one chord event, no individual long presses or clicks
   assert.deepStrictEqual(await keysSent(() => {

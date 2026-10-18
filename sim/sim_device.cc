@@ -40,6 +40,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_dir = argv[++i];
         else { fprintf(stderr, "unknown arg %s\n", argv[i]); return 2; }
     }
+    char voice_dir[] = "/tmp/sim_voice_XXXXXX";  // fake recordings; not cleaned up (tiny, in /tmp)
+    if (mkdtemp(voice_dir)) options.voice_dir = voice_dir;
     setenv("SIM_HTTP_HOST", host.c_str(), 1);
     setenv("SIM_HTTP_PORT", port.c_str(), 1);
     options.lan_address = host + ":" + port;

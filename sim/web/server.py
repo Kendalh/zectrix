@@ -28,8 +28,8 @@ SIM = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SIM / "tools"))
 import fb2png  # noqa: E402
 
-PAGES = ["home", "gallery", "weather", "weather_detail", "photo_detail", "settings", "ap_transfer"]
-KEYS = {"up", "down", "boot", "uplong", "downlong", "bootlong", "updownlong"}
+PAGES = ["home", "gallery", "weather", "weather_detail", "photo_detail", "settings", "ap_transfer", "voice"]
+KEYS = {"up", "down", "boot", "uplong", "downlong", "bootlong", "updownlong", "uplongrelease"}
 W, H = 400, 300
 
 

@@ -84,7 +84,7 @@ inline bool ParseKey(const std::string& k, ButtonEvent* out) {
         {"up2", ButtonEvent::kUpDoubleClick},  {"down2", ButtonEvent::kDownDoubleClick},
         {"uplong", ButtonEvent::kUpLongPress}, {"downlong", ButtonEvent::kDownLongPress},
         {"boot", ButtonEvent::kBootClick},     {"boot2", ButtonEvent::kBootDoubleClick},
-        {"bootlong", ButtonEvent::kBootLongPress},
+        {"bootlong", ButtonEvent::kBootLongPress}, {"uplongrelease", ButtonEvent::kUpLongRelease},
     };
     for (const auto& e : kKeys) {
         if (k == e.name) {

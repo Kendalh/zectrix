@@ -19,6 +19,9 @@
 #include "ui/renderers/rawdraw/photo_detail_renderer.h"
 #include "ui/renderers/rawdraw/photo_gallery.h"
 #include "ui/renderers/rawdraw/settings_renderer.h"
+#include "ui/renderers/rawdraw/voice_renderer.h"
+#include "fake/voice_backend_fake.h"
+#include "common/voice_recordings.h"
 #include "ui/renderers/rawdraw/weather_detail_renderer.h"
 #include "ui/renderers/rawdraw/weather_renderer.h"
 
@@ -28,6 +31,7 @@ public:
         // Fetch the canned weather at start (the device does so once Wi-Fi is up; the sim has no network).
         bool demo_weather = false;
         std::string lan_address = "127.0.0.1:8080";
+        std::string voice_dir = "/tmp";  // where the fake recorder keeps rec_NNNN.wav
     };
 
     explicit SimUi(const Options& options);
@@ -74,4 +78,9 @@ private:
     rawdraw::WeatherDetailRenderer weather_detail_;
     rawdraw::SettingsRenderer settings_;
     rawdraw::ApTransferRenderer ap_;
+
+    // Voice app: recordings go to a temp directory, capture/playback are faked.
+    voice::RecordingStore voice_store_;
+    voice::FakeVoiceBackend voice_backend_;
+    rawdraw::VoiceRenderer voice_;
 };

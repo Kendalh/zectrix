@@ -101,6 +101,8 @@ function makeButton(base, el) {
     if (longTimer !== null) {                     // released before the long-press threshold: a click
       clearTimeout(longTimer); longTimer = null;
       if (!chordFired) press(base);
+    } else if (longFired && base === 'up' && !chordFired) {
+      press('uplongrelease');                     // Voice app: releasing UP ends the recording
     }
   }
   el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); down(); });

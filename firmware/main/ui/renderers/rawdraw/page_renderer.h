@@ -27,6 +27,7 @@ struct ButtonEvent {
         kBootClick,
         kBootDoubleClick,
         kBootLongPress,
+        kUpLongRelease,  ///< UP released after a long press (Voice app: end of recording).
     };
     Type type;
 };
@@ -80,6 +81,14 @@ public:
      * @return true if full refresh needed (e.g., page switch)
      */
     virtual bool NeedsFullRefresh() const { return needs_full_refresh_; }
+
+    /**
+     * @brief True if the input event just handled must not trigger a screen refresh.
+     *
+     * Four-color panel refreshes take ~15 s, so pages whose feedback comes from elsewhere (Voice app:
+     * LED and beeps while recording) can skip them. Only valid right after HandleInput().
+     */
+    virtual bool SkipRefreshAfterInput() const { return false; }
 
     /**
      * @brief Mark page as needing full refresh

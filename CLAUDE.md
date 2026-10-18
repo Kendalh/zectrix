@@ -31,6 +31,13 @@ the active page (Settings: jump to top/bottom). There are no page-switching shor
 `sim/sim_ui.cc`** (and the other way round), then run `make -C sim test`. Decisions belong in
 `AppShell`/`HomeRenderer` where possible so there is only one copy.
 
+Voice app (`RawDrawPageId::Voice`): `ui/renderers/rawdraw/voice_renderer.*` (shared with the sim) talks to
+`common/voice_backend.h` (interface) and `common/voice_recordings.*` (WAV naming/listing, shared). Firmware backend:
+`voice/esp_voice_backend.*` (PCM tap `AudioService::SetPcmSink`, playback via `PushPcmToPlaybackQueue`); sim fake:
+`sim/fake/voice_backend_fake.*`. Hold UP = `kUpLongPress` (at 1 s) ... release = `kUpLongRelease`, sent by the board's
+UP `OnPressUp` -> `Application::OnUpLongRelease` (web sim key `uplongrelease`). `RawDrawUiManager::SwitchPage` and
+`SimUi::SwitchPage` call `VoiceRenderer::OnLeave()` when leaving the page. Not run on hardware.
+
 Gotchas found while building this (keep in mind for new pages):
 - Entering a page runs the renderer's `Init()`, which resets it (gallery: card mode, first photo). Anything
   that "selects then switches" is broken; switch first, then select (see `ShowPhotoById`).

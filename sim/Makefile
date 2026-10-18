@@ -12,19 +12,19 @@ CJSON_TAG := v1.7.18
 CJSON_DIR := $(BUILD)/cjson-src
 
 DEFS := -DBUILTIN_TEXT_FONT=SourceHanSansSC_Regular_slim -DBUILTIN_ICON_FONT=font_zectrix_16_1 -DPROJECT_VER=\"6.5.9\"
-INC := -Ishim -I$(CJSON_DIR) -I$(MAIN) -I$(MAIN)/rawdraw -I$(MAIN)/rawdraw/components -I$(MAIN)/ui/renderers/rawdraw
+INC := -Ishim -I$(CJSON_DIR) -I$(MAIN) -I$(MAIN)/rawdraw -I$(MAIN)/rawdraw/components -I$(MAIN)/ui/renderers/rawdraw -I.
 CXXFLAGS := -std=c++17 -O1 -g $(INC) -Wno-attributes $(DEFS)
 CFLAGS   := -O1 $(INC)
 
 CXX_SRCS := $(wildcard $(MAIN)/rawdraw/*.cc) \
             $(filter-out %/calendar.cc,$(wildcard $(MAIN)/rawdraw/components/*.cc)) \
             $(addprefix $(MAIN)/ui/renderers/rawdraw/,photo_gallery.cc photo_detail_renderer.cc weather_renderer.cc weather_detail_renderer.cc) \
-            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc) \
+            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc voice_renderer.cc) \
             $(MAIN)/ui/app_registry.cc $(MAIN)/ui/app_shell.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_renderer.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_server.cc \
-            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc \
-            fake/photo_storage.cc fake/weather_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
+            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc $(MAIN)/common/voice_recordings.cc \
+            fake/voice_backend_fake.cc fake/photo_storage.cc fake/weather_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
 C_SRCS   := $(filter-out %/cbin_font.c,$(wildcard $(FONTS)/*.c $(FONTS)/*/*.c)) sim_platform.c $(CJSON_DIR)/cJSON.c
 
 OBJS := $(patsubst %,$(BUILD)/%.o,$(notdir $(CXX_SRCS) $(C_SRCS)))

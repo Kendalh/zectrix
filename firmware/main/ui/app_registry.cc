@@ -19,12 +19,14 @@ const std::vector<AppEntry>& GetApps() {
          AppAction::OpenPage, RawDrawPageId::Gallery},
         {"weather", "天气", "天气预报", kWeatherSunGlyph, &weather_icons_16,
          AppAction::OpenPage, RawDrawPageId::Weather},
+        {"voice", "语音", "录音与播放", FA_SETTINGS_VOLUME, &fa_settings_16,
+         AppAction::OpenPage, RawDrawPageId::Voice},
         {"transfer", "传图", "热点传照片", FA_SETTINGS_SYNC, &fa_settings_16,
          AppAction::StartApTransfer, RawDrawPageId::APTransfer},
-        {"settings", "设置", "Wi-Fi 与系统", FA_SETTINGS_GEAR, &fa_settings_16,
-         AppAction::OpenPage, RawDrawPageId::Settings},
         {"wifi_config", "配网", "配置 Wi-Fi", FA_SETTINGS_WIFI, &fa_settings_16,
          AppAction::StartWifiConfig, RawDrawPageId::APTransfer},
+        {"settings", "设置", "Wi-Fi 与系统", FA_SETTINGS_GEAR, &fa_settings_16,
+         AppAction::OpenPage, RawDrawPageId::Settings},
     };
     return kApps;
 }

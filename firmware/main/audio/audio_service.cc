@@ -36,6 +36,13 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_processor_ = std::make_unique<NoAudioProcessor>();
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
+        {
+            std::lock_guard<std::mutex> lock(pcm_sink_mutex_);
+            if (pcm_sink_) {
+                pcm_sink_(data);
+                return;
+            }
+        }
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
 
@@ -827,4 +834,29 @@ void AudioService::MarkPttStart(int64_t start_ms) {
 
 bool AudioService::IsAfeWakeWord() {
     return false;
+}
+
+void AudioService::SetPcmSink(std::function<void(const std::vector<int16_t>&)> sink) {
+    std::lock_guard<std::mutex> lock(pcm_sink_mutex_);
+    pcm_sink_ = std::move(sink);
+}
+
+bool AudioService::PushPcmToPlaybackQueue(std::vector<int16_t>&& pcm) {
+    auto task = std::make_unique<AudioTask>();
+    task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task->timestamp = 0;
+    task->pcm = std::move(pcm);
+
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (!audio_queue_cv_.wait_for(lock, std::chrono::seconds(2), [this]() {
+            return service_stopped_ || audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE;
+        })) {
+        return false;
+    }
+    if (service_stopped_) {
+        return false;
+    }
+    audio_playback_queue_.push_back(std::move(task));
+    audio_queue_cv_.notify_all();
+    return true;
 }

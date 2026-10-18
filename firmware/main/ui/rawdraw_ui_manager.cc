@@ -33,7 +33,7 @@ static constexpr const char* kRawDrawThemeNvsKey = "rawdraw_theme";
 // it disabled for now. To restore minute-by-minute clock updates later, flip
 // this to true after a safe status-bar-only refresh path exists.
 static constexpr bool kEnableMinuteClockRefresh = false;
-// Home-page and photo-gallery UP/DOWN only move a cursor/selection, and reaching the wanted item takes
+// Home-page, photo-gallery and Voice-list UP/DOWN only move a cursor/selection, and reaching the wanted item takes
 // several presses while a four-color refresh takes ~16 s. These presses are never locked out; one refresh
 // is requested this long after the last press (the UI pump then runs it within ~1 s).
 static constexpr int kCursorRefreshDelayMs = 800;
@@ -221,6 +221,7 @@ const char* RawDrawUiManager::GetPageTitle(RawDrawPageId page) {
         case RawDrawPageId::FontMetrics: return "字体指标";
         case RawDrawPageId::APTransfer: return "传图模式";
         case RawDrawPageId::Home:     return "首页";
+        case RawDrawPageId::Voice:    return "语音";
         default:               return "未知";
     }
 }
@@ -240,6 +241,7 @@ RawDrawUiManager::RawDrawUiManager()
     , voice_wakeup_state_() {
     // Create renderers
     clock_.SetColor(rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::Accent).fg);
+    voice_renderer_ = std::make_unique<rawdraw::VoiceRenderer>();
     home_renderer_ = std::make_unique<rawdraw::HomeRenderer>();
     home_renderer_->SetLaunchCallback([this](const AppEntry& app) { app_shell_.Launch(app); });
     AppShell::Host shell_host;
@@ -493,6 +495,11 @@ void RawDrawUiManager::SwitchPage(RawDrawPageId page) {
     ESP_LOGI(kTag, "Switching page: %s -> %s",
              GetPageTitle(current_page_), GetPageTitle(page));
 
+    // Leaving the Voice app stops any capture / playback.
+    if (current_page_ == RawDrawPageId::Voice && voice_renderer_) {
+        voice_renderer_->OnLeave();
+    }
+
     // Initialize the new page renderer
     InitRenderer(page);
 
@@ -573,6 +580,7 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::FontMetrics: return font_metrics_renderer_.get();
         case RawDrawPageId::APTransfer: return ap_transfer_renderer_.get();
         case RawDrawPageId::Home:     return home_renderer_.get();
+        case RawDrawPageId::Voice:    return voice_renderer_.get();
         default:               return nullptr;
     }
 }
@@ -745,7 +753,8 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
                  (unsigned)(esp_timer_get_time() / 1000));
     }
     const bool cursor_click =
-        (current_page_ == RawDrawPageId::Home || current_page_ == RawDrawPageId::Gallery) &&
+        (current_page_ == RawDrawPageId::Home || current_page_ == RawDrawPageId::Gallery ||
+         current_page_ == RawDrawPageId::Voice) &&
         (event.type == rawdraw::ButtonEvent::kUpClick || event.type == rawdraw::ButtonEvent::kDownClick);
     if (navigation_click && !cursor_click && input_refresh_locked_.load(std::memory_order_acquire)) {
         const int64_t held_ms = esp_timer_get_time() / 1000 - input_lock_since_ms_.load(std::memory_order_acquire);
@@ -871,6 +880,9 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
     // Route event to active page renderer
     bool handled = renderer->HandleInput(event);
 
+    if (handled && renderer->SkipRefreshAfterInput()) {
+        return true;
+    }
     if (handled) {
         if (cursor_click) {
             // Cursor/selection already moved in the renderer; coalesce presses into one refresh.

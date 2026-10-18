@@ -7,6 +7,8 @@
 #include <string_view>
 
 #include "audio_service.h"
+#include "common/voice_recordings.h"
+#include "voice/esp_voice_backend.h"
 #include "device_state.h"
 
 namespace ui {
@@ -43,6 +45,7 @@ public:
     void OnDownClick();
     void OnUpLongPress();
     void OnDownLongPress();
+    void OnUpLongRelease();
     void OnWifiConfigComboLongPress();
     void OnBootClick();
     void OnBootLongPress();
@@ -54,6 +57,8 @@ private:
     std::atomic<DeviceState> state_{kDeviceStateUnknown};
     std::atomic<bool> wifi_connected_{false};
     AudioService audio_service_;
+    voice::RecordingStore voice_store_{"/spiffs"};
+    std::unique_ptr<voice::EspVoiceBackend> voice_backend_;
     std::unique_ptr<ui::RawDrawUiManager> rawdraw_ui_manager_;
     esp_timer_handle_t sleep_timer_ = nullptr;
 

@@ -381,6 +381,10 @@ private:
                     Application::GetInstance().OnUpLongPress();
                 }
             }
+            if (was_long_press && !s_down_held.load()) {
+                // Voice app: releasing UP ends the recording started by the long press.
+                Application::GetInstance().OnUpLongRelease();
+            }
             s_up_held.store(false);
         });
 

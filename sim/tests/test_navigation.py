@@ -56,14 +56,14 @@ class NavigationTest(unittest.TestCase):
         page, _, _ = self.dev.cmd("reset")
         self.assertEqual(page, "home")
 
-    # App order: 相册, 天气, 传图, 设置, 配网
+    # App order: 相册, 天气, 语音, 传图, 配网, 设置
     def open_app(self, index):
         for _ in range(index):
             self.dev.keys("down")
         return self.dev.keys("boot")
 
     def test_each_app_opens_and_boot_long_returns_home(self):
-        expected = ["gallery", "weather", "ap_transfer", "settings", "ap_transfer"]
+        expected = ["gallery", "weather", "voice", "ap_transfer", "ap_transfer", "settings"]
         for index, page in enumerate(expected):
             with self.subTest(app=index):
                 self.assertEqual(self.open_app(index), page)
@@ -71,8 +71,15 @@ class NavigationTest(unittest.TestCase):
                 # Home remembers the last selection, so reset to the top for the next case.
                 self.dev.cmd("reset")
 
+    def test_home_scrolls_to_apps_beyond_the_fifth(self):
+        home = self.dev.cmd("reset")[2]
+        for _ in range(5):
+            self.dev.keys("down")
+        self.assertNotEqual(self.dev.cmd("screen")[2], home)  # the list scrolled
+        self.assertEqual(self.dev.keys("boot"), "settings")  # 6th app
+
     def test_selection_wraps(self):
-        self.assertEqual(self.dev.keys("up", "boot"), "ap_transfer")  # last entry: 配网
+        self.assertEqual(self.dev.keys("up", "boot"), "settings")  # last entry: 设置
         self.dev.keys("bootlong")
         self.assertEqual(self.dev.keys("down", "boot"), "gallery")    # wrapped to first
 
@@ -113,6 +120,63 @@ class NavigationTest(unittest.TestCase):
         page, _, frame = self.dev.cmd("screen")
         self.assertEqual(page, "gallery")
         self.assertEqual(frame, data)
+
+
+class VoiceAppTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dev = Device()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+
+    def setUp(self):
+        self.dev.cmd("reset")
+        self.dev.cmd("jump voice")
+
+    def test_hold_up_records_and_release_saves_a_listed_recording(self):
+        idle = self.dev.cmd("screen")[2]
+        recording = self.dev.cmd("key uplong")[2]
+        self.assertNotEqual(recording, idle)
+        saved = self.dev.cmd("key uplongrelease")[2]
+        self.assertNotEqual(saved, recording)
+        self.assertNotEqual(saved, idle)  # the list now has an entry
+
+    def test_boot_plays_and_stops_the_selected_recording(self):
+        self.dev.keys("uplong", "uplongrelease")
+        listed = self.dev.cmd("screen")[2]
+        playing = self.dev.cmd("key boot")[2]
+        self.assertNotEqual(playing, listed)
+        self.assertEqual(self.dev.cmd("key boot")[2], listed)
+
+    def test_down_long_deletes_the_selected_recording(self):
+        self.dev.keys("uplong", "uplongrelease")
+        with_one_more = self.dev.cmd("screen")[2]
+        after_delete = self.dev.cmd("key downlong")[2]
+        self.assertNotEqual(after_delete, with_one_more)
+        # deleting everything leaves the empty-list screen, and more deletes do nothing
+        for _ in range(25):
+            self.dev.cmd("key downlong")
+        empty = self.dev.cmd("screen")[2]
+        self.assertEqual(self.dev.cmd("key downlong")[2], empty)
+        self.dev.keys("uplong", "uplongrelease")
+        self.assertNotEqual(self.dev.cmd("screen")[2], empty)
+
+    def test_boot_long_returns_home_and_stops_recording(self):
+        self.dev.cmd("key uplong")
+        self.assertEqual(self.dev.keys("bootlong"), "home")
+        self.dev.keys("down", "down")  # 语音 is the 3rd app
+        self.assertEqual(self.dev.keys("boot"), "voice")
+        idle = self.dev.cmd("screen")[2]
+        # a new recording can start: the earlier one was stopped when the page was left
+        self.assertNotEqual(self.dev.cmd("key uplong")[2], idle)
+
+    def test_boot_long_does_not_record(self):
+        before = self.dev.cmd("screen")[2]
+        self.assertEqual(self.dev.keys("bootlong"), "home")
+        self.dev.cmd("jump voice")
+        self.assertEqual(self.dev.cmd("screen")[2], before)
 
 
 if __name__ == "__main__":

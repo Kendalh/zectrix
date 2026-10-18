@@ -116,6 +116,15 @@ public:
     void SetModelsList(srmodel_list_t* models_list);
     void MarkPttStart(int64_t start_ms);
 
+    /**
+     * Raw capture tap (Voice app). While a sink is set, the 16 kHz mono 60 ms frames from the audio
+     * processor go to it instead of the Opus encoder. It runs on the audio input task: keep it short.
+     * Pass an empty function to restore the normal path.
+     */
+    void SetPcmSink(std::function<void(const std::vector<int16_t>&)> sink);
+    /** Queue PCM (codec output rate, mono) for playback. Blocks while the queue is full; false if stopped/timeout. */
+    bool PushPcmToPlaybackQueue(std::vector<int16_t>&& pcm);
+
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
@@ -129,6 +138,8 @@ private:
     OpusResampler output_resampler_;
     DebugStatistics debug_statistics_;
     srmodel_list_t* models_list_ = nullptr;
+    std::mutex pcm_sink_mutex_;
+    std::function<void(const std::vector<int16_t>&)> pcm_sink_;
 
     EventGroupHandle_t event_group_;
 

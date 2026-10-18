@@ -16,7 +16,9 @@ constexpr int kSettingsLanIpIndex = 7;
 std::string MinutesLabel(int minutes) { return minutes <= 0 ? "关闭" : std::to_string(minutes) + "min"; }
 }  // namespace
 
-SimUi::SimUi(const Options& options) : options_(options) {
+SimUi::SimUi(const Options& options)
+    : options_(options), voice_store_(options.voice_dir), voice_backend_(&voice_store_) {
+    voice_.SetBackend(&voice_backend_, &voice_store_);
     home_.SetLaunchCallback([this](const ui::AppEntry& app) { shell_.Launch(app); });
 
     ui::AppShell::Host host;
@@ -48,6 +50,7 @@ const char* SimUi::PageName(RawDrawPageId page) {
         case RawDrawPageId::WeatherDetail: return "weather_detail";
         case RawDrawPageId::Settings: return "settings";
         case RawDrawPageId::APTransfer: return "ap_transfer";
+        case RawDrawPageId::Voice: return "voice";
         default: return "unknown";
     }
 }
@@ -55,7 +58,7 @@ const char* SimUi::PageName(RawDrawPageId page) {
 bool SimUi::PageFromName(const std::string& name, RawDrawPageId* page) {
     for (RawDrawPageId p : {RawDrawPageId::Home, RawDrawPageId::Gallery, RawDrawPageId::PhotoDetail,
                             RawDrawPageId::Weather, RawDrawPageId::WeatherDetail,
-                            RawDrawPageId::Settings, RawDrawPageId::APTransfer}) {
+                            RawDrawPageId::Settings, RawDrawPageId::APTransfer, RawDrawPageId::Voice}) {
         if (name == PageName(p)) {
             *page = p;
             return true;
@@ -73,6 +76,7 @@ rawdraw::PageRenderer* SimUi::RendererFor(RawDrawPageId page) {
         case RawDrawPageId::WeatherDetail: return &weather_detail_;
         case RawDrawPageId::Settings: return &settings_;
         case RawDrawPageId::APTransfer: return &ap_;
+        case RawDrawPageId::Voice: return &voice_;
         default: return nullptr;
     }
 }
@@ -85,6 +89,7 @@ RawDrawPageId SimUi::CurrentPage() {
 // Same order as RawDrawUiManager::SwitchPage: Init() the new renderer, then make it current.
 void SimUi::SwitchPage(RawDrawPageId page) {
     if (page == current_) return;
+    if (current_ == RawDrawPageId::Voice) voice_.OnLeave();  // as RawDrawUiManager::SwitchPage
     if (auto* r = RendererFor(page)) {
         r->Init(sim::kW, sim::kH);
         r->MarkFullRefresh();
