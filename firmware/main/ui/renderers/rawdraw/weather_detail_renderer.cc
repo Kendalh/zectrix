@@ -28,6 +28,7 @@ const char* IconGlyphForCode(const std::string& icon_code, const std::string& we
     if ((code >= 101 && code <= 104) || weather_text.find("云") != std::string::npos) return "\xef\x83\x82";
     if ((code >= 300 && code <= 399) || weather_text.find("雨") != std::string::npos) return "\xef\x83\xa9";
     if ((code >= 400 && code <= 499) || weather_text.find("雪") != std::string::npos) return "\xef\x8b\x9c";
+    if ((code >= 500 && code <= 599) || weather_text.find("雾") != std::string::npos) return "\xef\x9d\x9f";
     return "\xef\x83\x9e";
 }
 
@@ -82,12 +83,12 @@ void WeatherDetailRenderer::Render(uint8_t* fb, int width, int height) {
 
         Rect metrics{238, content_top + 16, 130, 108};
         DrawStyledRoundRect(fb, width, height, metrics, Style::kBorderRadiusMD, card_style);
-        const char* labels[] = {"体感温度", "湿度", "能见度", "气压"};
+        const char* labels[] = {"体感温度", "湿度", "风力", "气压"};
         std::string values[] = {
             (data_.feels_like.empty() ? (data_.temp.empty() ? "--" : data_.temp) : data_.feels_like) + "°C",
             (data_.humidity.empty() ? "--" : data_.humidity) + "%",
-            "20km",
-            "1012hPa",
+            data_.wind_scale.empty() ? "--" : data_.wind_scale + "级",
+            data_.pressure.empty() ? "--" : data_.pressure + "hPa",
         };
         for (int i = 0; i < 4; ++i) {
             const int center_y = metrics.y + 20 + i * 24;
@@ -189,7 +190,10 @@ bool WeatherDetailRenderer::HandleInput(const ButtonEvent& event) {
 void WeatherDetailRenderer::Update(const WeatherData& data) {
     data_ = data;
     has_data_ = true;
-    if (hourly_.empty()) {
+    if (!data.hourly.empty()) {
+        hourly_.clear();
+        for (const auto& h : data.hourly) hourly_.push_back({h.label, h.icon_code, h.weather_text, h.temp});
+    } else if (hourly_.empty()) {
         BuildFallbackTimeline();
     }
     selected_hour_ = std::max(0, std::min(selected_hour_, static_cast<int>(hourly_.size()) - 1));

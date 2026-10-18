@@ -177,6 +177,9 @@ public:
                             const std::string& password,
                             const std::string& url);
     bool StartLanHttpServer(const std::string& ip_address);
+
+    // Start the background weather refresh (idempotent; call once Wi-Fi is connected).
+    void StartWeatherService();
     void StopLanHttpServer();
 
     /**
@@ -460,6 +463,7 @@ private:
     std::atomic<bool> active_page_refresh_pending_{false};
     std::atomic<bool> gallery_slideshow_pending_{false};
     std::atomic<bool> input_refresh_locked_{false};
+    std::atomic<int64_t> input_lock_since_ms_{0};  // when the lock was taken; see kInputLockTimeoutMs
     int last_clock_minute_key_ = -1;
     int gallery_slideshow_interval_minutes_ = 0;
 

@@ -7,6 +7,7 @@
 
 #include "common/photo_storage.h"
 #include "common/weather_api.h"
+#include "common/weather_parse.h"
 #include "ui/renderers/rawdraw/page_renderer.h"
 
 namespace sim {
@@ -52,32 +53,28 @@ inline void SeedPhotos() {
     }
 }
 
-inline WeatherData MakeWeather() {
+// Real-shape Open-Meteo responses, fed through the firmware's own parser (common/weather_parse.cc).
+inline const char* SampleForecastJson() {
+    return R"JSON({"latitude":30.29,"longitude":120.16,"timezone":"Asia/Shanghai",
+"current":{"time":"2026-10-16T14:30","interval":900,"temperature_2m":24.6,"apparent_temperature":26.8,
+ "relative_humidity_2m":45,"weather_code":2,"pressure_msl":1011.7,"wind_speed_10m":14.2,"wind_direction_10m":135},
+"hourly":{"time":["2026-10-16T14:00","2026-10-16T15:00","2026-10-16T16:00","2026-10-16T17:00","2026-10-16T18:00","2026-10-16T19:00","2026-10-16T20:00","2026-10-16T21:00","2026-10-16T22:00","2026-10-16T23:00","2026-10-17T00:00","2026-10-17T01:00","2026-10-17T02:00","2026-10-17T03:00","2026-10-17T04:00","2026-10-17T05:00"],
+ "temperature_2m":[24.6,24.1,23.5,22.2,21.0,20.4,19.8,19.1,18.6,18.2,17.9,17.5,17.2,17.0,16.8,16.6],
+ "weather_code":[2,2,3,3,61,61,61,3,3,1,0,0,0,0,0,0]},
+"daily":{"time":["2026-10-16","2026-10-17","2026-10-18","2026-10-19","2026-10-20","2026-10-21","2026-10-22"],
+ "weather_code":[2,61,63,3,0,45,95],
+ "temperature_2m_max":[27.4,24.9,22.0,23.1,26.6,25.8,21.3],
+ "temperature_2m_min":[18.2,16.7,15.0,14.2,15.9,17.4,16.1],
+ "uv_index_max":[5.8,3.1,2.0,3.4,6.9,4.2,2.5]}})JSON";
+}
+
+inline const char* SampleAirJson() { return R"JSON({"current":{"time":"2026-10-16T14:00","us_aqi":38}})JSON"; }
+
+inline WeatherData MakeWeather(const std::string& city = "杭州") {
     WeatherData d;
-    d.city = "杭州";
-    d.temp = "25";
-    d.temp_int = 25;
-    d.feels_like = "27";
-    d.weather_icon = "101";
-    d.weather_text = "多云";
-    d.wind_dir = "东南风";
-    d.wind_scale = "3";
-    d.humidity = "45";
-    d.update_time = "14:30";
-    d.air_quality = "优";
-    d.air_aqi = 38;
-    const char* labels[] = {"今天", "明天", "后天"};
-    const char* texts[] = {"多云", "小雨", "晴"};
-    const char* icons[] = {"101", "305", "100"};
-    for (int i = 0; i < 3; ++i) {
-        WeatherForecastDay f;
-        f.label = labels[i];
-        f.weather_text = texts[i];
-        f.icon_code = icons[i];
-        f.temp_min = 18 + i;
-        f.temp_max = 27 - i * 2;
-        d.forecast.push_back(f);
-    }
+    d.city = city;
+    ParseOpenMeteoForecast(SampleForecastJson(), &d);
+    ParseOpenMeteoAir(SampleAirJson(), &d);
     return d;
 }
 

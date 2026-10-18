@@ -36,6 +36,7 @@ private:
     std::string firmware_version_;
     bool has_data_;
     int page_index_ = 0;  // Selected forecast day index
+    std::string loading_city_;  // set while waiting for data after a city switch
     const lv_font_t* font_ = nullptr;
     const lv_font_t* title_font_ = nullptr;
 };

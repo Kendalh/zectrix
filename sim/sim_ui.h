@@ -25,7 +25,7 @@
 class SimUi {
 public:
     struct Options {
-        // The device has no weather data source yet; the simulator matches that by default.
+        // Fetch the canned weather at start (the device does so once Wi-Fi is up; the sim has no network).
         bool demo_weather = false;
         std::string lan_address = "127.0.0.1:8080";
     };

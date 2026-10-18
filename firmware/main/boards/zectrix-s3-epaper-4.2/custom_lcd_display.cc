@@ -4,6 +4,7 @@
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -29,6 +30,9 @@ LV_FONT_DECLARE(weather_icons_48);   // Weather icons 48px (FontAwesome)
 #define TAG "CustomLcdDisplay"
 static constexpr uint32_t kDisplayKickMs = 1000;
 static constexpr int kFourColorSampleIntervalMs = 12000;
+
+// Temporary refresh-latency tracing (grep "[TIMING]"). Remove once the key-to-refresh delay is understood.
+static inline unsigned TimingMs() { return (unsigned)(esp_timer_get_time() / 1000); }
 
 #ifndef EXAMPLE_LCD_WIDTH
 #define EXAMPLE_LCD_WIDTH  400
@@ -155,6 +159,7 @@ void CustomLcdDisplay::lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, 
         driver->dirty = rect_union(driver->dirty, r);
         driver->pending = true;
         driver->refresh_in_progress = true;
+        driver->refresh_busy_seen_ = true;
         driver->UpdateDisplayBusyLocked();
         uint32_t kick_ms = kDisplayKickMs;
         if (driver->next_kick_ms_ > 0) {
@@ -240,6 +245,7 @@ CustomLcdDisplay::CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_p
         sample_interval_ms = kFourColorSampleIntervalMs;
     }
 
+    ESP_LOGW(TAG, "[TIMING] build marker %s %s", __DATE__, __TIME__);
     ESP_LOGI(TAG, "EPD init");
     EPD_Init();
 
@@ -378,11 +384,13 @@ bool CustomLcdDisplay::IsRefreshPending() {
 }
 
 void CustomLcdDisplay::RequestUrgentRefresh() {
+    ESP_LOGW(TAG, "[TIMING] RequestUrgentRefresh t=%u", TimingMs());
     if (dirty_mutex) {
         xSemaphoreTake(dirty_mutex, portMAX_DELAY);
     }
     urgent_refresh = true;
     refresh_in_progress = true;
+    refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
     const uint32_t default_kick_ms = IsFourColorPanel() ? (uint32_t)sample_interval_ms : kDisplayKickMs;
     const uint32_t kick_ms = (next_kick_ms_ > 0) ? next_kick_ms_ : default_kick_ms;
     next_kick_ms_ = 0;
@@ -403,6 +411,7 @@ void CustomLcdDisplay::RequestUrgentFullRefresh() {
     urgent_refresh = true;
     force_full_refresh_ = true;
     refresh_in_progress = true;
+    refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
     const uint32_t default_kick_ms = IsFourColorPanel() ? (uint32_t)sample_interval_ms : kDisplayKickMs;
     const uint32_t kick_ms = (next_kick_ms_ > 0) ? next_kick_ms_ : default_kick_ms;
     next_kick_ms_ = 0;
@@ -510,10 +519,16 @@ void CustomLcdDisplay::refresh_task_loop() {
         }
         if (urgent || rect_area(r) > 0) {
             refresh_in_progress = true;
+            refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
+            ESP_LOGW(TAG, "[TIMING] task wake: urgent=%d force_full=%d area=%d t=%u", (int)urgent,
+                     (int)force_full, rect_area(r), TimingMs());
         }
         UpdateDisplayBusyLocked();
-        (void)CheckRefreshIdleLocked();
+        const bool idle_at_wake = CheckRefreshIdleLocked();
         xSemaphoreGive(dirty_mutex);
+        if (idle_at_wake && on_refresh_idle_) {
+            on_refresh_idle_();  // do not swallow an idle edge noticed here
+        }
 
         // 周期性采样：按 last_sample_tick 计时，非刷新结束时间
         TickType_t min_ticks = pdMS_TO_TICKS(sample_interval_ms);
@@ -521,10 +536,14 @@ void CustomLcdDisplay::refresh_task_loop() {
             TickType_t elapsed = (last_sample_tick == 0) ? min_ticks : (now - last_sample_tick);
             if (elapsed < min_ticks) {
                 stat_skip_throttle++;
+                ESP_LOGW(TAG, "[TIMING] throttled: elapsed=%u ms, waiting %u ms t=%u",
+                         (unsigned)(elapsed * portTICK_PERIOD_MS),
+                         (unsigned)((min_ticks - elapsed) * portTICK_PERIOD_MS), TimingMs());
                 maybe_log_stats(now);
-                // Avoid spinning when notifications arrive too frequently.
+                // Sleep out the throttle window, but wake on a notification so an urgent request
+                // (button press) is served at once instead of after the remaining throttle time.
                 TickType_t wait_ticks = min_ticks - elapsed;
-                vTaskDelay(wait_ticks > 0 ? wait_ticks : 1);
+                ulTaskNotifyTake(pdTRUE, wait_ticks > 0 ? wait_ticks : 1);
                 continue;
             }
         }
@@ -542,8 +561,20 @@ void CustomLcdDisplay::refresh_task_loop() {
                 ESP_LOGI(TAG, "[REFRESH] Debounce merged dirty: x=%d, y=%d, w=%d, h=%d, area=%d",
                          r.x, r.y, r.w, r.h, rect_area(r));
             }
+            // A button press during the long (3 s) idle debounce must not wait for it to run out.
+            const bool became_urgent = !urgent && urgent_refresh;
+            if (became_urgent) {
+                urgent = true;
+                urgent_refresh = false;
+            }
             xSemaphoreGive(dirty_mutex);
+            if (became_urgent) {
+                break;
+            }
         }
+
+        ESP_LOGW(TAG, "[TIMING] debounce done (%u ms window) t=%u",
+                 (unsigned)(debounce_ticks * portTICK_PERIOD_MS), TimingMs());
 
         // Take full-frame snapshot into tx_buf under mutex (avoid tearing)
         xSemaphoreTake(dirty_mutex, portMAX_DELAY);
@@ -595,6 +626,17 @@ void CustomLcdDisplay::refresh_task_loop() {
                          tiny_diff_streak, (unsigned)tiny_diff_accum_bits);
                 stat_skip_tiny++;
                 maybe_log_stats(last_sample_tick);
+                // Nothing will be drawn for this request: end the "refresh" so the UI input lock
+                // (released from the idle callback) is not held until some unrelated later refresh.
+                bool fire_idle_cb = false;
+                xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+                refresh_in_progress = false;
+                UpdateDisplayBusyLocked();
+                fire_idle_cb = CheckRefreshIdleLocked();
+                xSemaphoreGive(dirty_mutex);
+                if (fire_idle_cb && on_refresh_idle_) {
+                    on_refresh_idle_();
+                }
                 vTaskDelay(1);
                 continue;
             }
@@ -634,8 +676,11 @@ void CustomLcdDisplay::refresh_task_loop() {
         if (should_full) {
             stat_full++;
             ESP_LOGI(TAG, "[REFRESH] Performing FULL refresh");
+            ESP_LOGW(TAG, "[TIMING] FULL: before EPD_Init t=%u", TimingMs());
             EPD_Init();
+            ESP_LOGW(TAG, "[TIMING] FULL: EPD_Init done, before EPD_Display t=%u", TimingMs());
             EPD_Display();
+            ESP_LOGW(TAG, "[TIMING] FULL: EPD_Display done t=%u", TimingMs());
 
             memcpy(prev_buffer, tx_buf, lcd_spi_data.buffer_len);
             prev_buffer_synced = true;
@@ -644,8 +689,10 @@ void CustomLcdDisplay::refresh_task_loop() {
         {
             stat_partial++;
             ESP_LOGI(TAG, "[REFRESH] Performing PARTIAL refresh");
+            ESP_LOGW(TAG, "[TIMING] PARTIAL: before EPD_Init t=%u", TimingMs());
             EPD_Init();
             EPD_DisplayPart();
+            ESP_LOGW(TAG, "[TIMING] PARTIAL: done t=%u", TimingMs());
             memcpy(prev_buffer, tx_buf, lcd_spi_data.buffer_len);
             prev_buffer_synced = true;
             partial_since_full++;
@@ -766,6 +813,8 @@ void CustomLcdDisplay::read_busy() {
     const TickType_t start = xTaskGetTickCount();
     const TickType_t timeout = pdMS_TO_TICKS(IsFourColorPanel() ? 120000 : 30000);
     TickType_t last_log = start;
+    const unsigned t_start_ms = TimingMs();
+    const bool was_busy = gpio_get_level((gpio_num_t)busy) == 0;
 
     while (gpio_get_level((gpio_num_t)busy) == 0) {
         const TickType_t now = xTaskGetTickCount();
@@ -780,6 +829,8 @@ void CustomLcdDisplay::read_busy() {
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    ESP_LOGW(TAG, "[TIMING] read_busy done: waited=%u ms (was_busy=%d) at t=%u", TimingMs() - t_start_ms,
+             (int)was_busy, TimingMs());
 }
 
 // =======================================================
@@ -860,12 +911,14 @@ void CustomLcdDisplay::writeBytes(const uint8_t *buf, int len) {
 }
 
 void CustomLcdDisplay::EPD_TurnOnDisplay() {
+    ESP_LOGW(TAG, "[TIMING] TurnOn: cmd 0x04 power on t=%u", TimingMs());
     EPD_SendCommand(0x04); //power on
     read_busy();
     if (IsFourColorPanel()) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
+    ESP_LOGW(TAG, "[TIMING] TurnOn: cmd 0x12 refresh t=%u", TimingMs());
     EPD_SendCommand(0x12);  // Display Refresh
     EPD_SendData(0x00);                
     if (IsFourColorPanel()) {
@@ -873,6 +926,7 @@ void CustomLcdDisplay::EPD_TurnOnDisplay() {
     }
     read_busy(); 
 
+    ESP_LOGW(TAG, "[TIMING] TurnOn: cmd 0x02 power off t=%u", TimingMs());
     EPD_SendCommand(0x02);  // Power OFF
     EPD_SendData(0x00);                  
     read_busy(); 
@@ -1385,6 +1439,7 @@ void CustomLcdDisplay::WriteRaw1bpp(int x, int y, int w, int h, const uint8_t* d
         dirty = rect_union(dirty, r);
         pending = true;
         refresh_in_progress = true;
+        refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
         UpdateDisplayBusyLocked();
         sm_kick(kDisplayKickMs, "display_raw1bpp");
         if (refresh_task) {
@@ -1420,6 +1475,7 @@ void CustomLcdDisplay::InvertRegion(int x, int y, int w, int h) {
         dirty = rect_union(dirty, r);
         pending = true;
         refresh_in_progress = true;
+        refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
         UpdateDisplayBusyLocked();
         sm_kick(kDisplayKickMs, "display_invert");
         if (refresh_task) {
@@ -1536,6 +1592,7 @@ void CustomLcdDisplay::DrawTexts(const std::vector<TextItem>& texts, bool clear)
     dirty = rect_union(dirty, r);
     pending = true;
     refresh_in_progress = true;
+    refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
     UpdateDisplayBusyLocked();
     sm_kick(kDisplayKickMs, "display_text");
     if (refresh_task) {
@@ -1568,6 +1625,7 @@ void CustomLcdDisplay::RawDrawRoundRect(int x, int y, int w, int h, int radius,
         dirty = rect_union(dirty, dr);
         pending = true;
         refresh_in_progress = true;
+        refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
         UpdateDisplayBusyLocked();
     }
     xSemaphoreGive(dirty_mutex);
@@ -1589,6 +1647,7 @@ void CustomLcdDisplay::RawDrawHLine(int y, int thickness) {
         dirty = rect_union(dirty, dr);
         pending = true;
         refresh_in_progress = true;
+        refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
         UpdateDisplayBusyLocked();
     }
     xSemaphoreGive(dirty_mutex);
@@ -1604,6 +1663,7 @@ void CustomLcdDisplay::RawInvertRegion(int x, int y, int w, int h) {
         dirty = rect_union(dirty, dr);
         pending = true;
         refresh_in_progress = true;
+        refresh_busy_seen_ = true;  // a request counts as busy even if the task never polls before it ends
         UpdateDisplayBusyLocked();
     }
     xSemaphoreGive(dirty_mutex);

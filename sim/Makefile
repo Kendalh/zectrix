@@ -23,10 +23,13 @@ CXX_SRCS := $(wildcard $(MAIN)/rawdraw/*.cc) \
             $(MAIN)/ui/app_registry.cc $(MAIN)/ui/app_shell.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_renderer.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_server.cc \
-            fake/photo_storage.cc fake/weather_api.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
+            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc \
+            fake/photo_storage.cc fake/weather_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
 C_SRCS   := $(filter-out %/cbin_font.c,$(wildcard $(FONTS)/*.c $(FONTS)/*/*.c)) sim_platform.c $(CJSON_DIR)/cJSON.c
 
 OBJS := $(patsubst %,$(BUILD)/%.o,$(notdir $(CXX_SRCS) $(C_SRCS)))
+# fake/ first: common/photo_storage.cc (ESP-IDF) must not shadow fake/photo_storage.cc
+vpath %.cc fake
 vpath %.cc $(sort $(dir $(CXX_SRCS)))
 vpath %.c  $(sort $(dir $(C_SRCS)))
 LIBOBJS := $(filter-out $(BUILD)/sim_main.cc.o $(BUILD)/sim_device.cc.o,$(OBJS))
@@ -58,7 +61,11 @@ check-firmware: | $(CJSON_DIR)/cJSON.c
 	$(CXX) -std=c++17 -fsyntax-only -Icheck $(CXXFLAGS) $(MAIN)/ui/rawdraw_ui_manager.cc
 	@echo "check-firmware: rawdraw_ui_manager.cc OK (application.cc is not covered)"
 
-test: all
+$(BUILD)/test_weather_parse: tests/test_weather_parse.cc $(LIBOBJS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
+
+test: all $(BUILD)/test_weather_parse
+	$(BUILD)/test_weather_parse
 	python3 tests/test_navigation.py -v
 	@command -v node >/dev/null && node tests/test_buttons.js || echo "node not found: skipped tests/test_buttons.js"
 

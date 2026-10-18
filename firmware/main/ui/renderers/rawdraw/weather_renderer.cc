@@ -117,9 +117,9 @@ const char* IconGlyphForCode(const std::string& icon_code, const std::string& we
 
 std::vector<ForecastRenderItem> BuildForecastItems(const WeatherData& data) {
     std::vector<ForecastRenderItem> items;
-    items.reserve(4);
+    items.reserve(7);
 
-    for (size_t i = 0; i < data.forecast.size() && items.size() < 4; ++i) {
+    for (size_t i = 0; i < data.forecast.size() && items.size() < 7; ++i) {
         const auto& src = data.forecast[i];
         items.push_back({src.label, src.weather_text, src.icon_code, src.temp_min, src.temp_max});
     }
@@ -141,7 +141,7 @@ WeatherRenderer::~WeatherRenderer() {}
 void WeatherRenderer::Init(int width, int height) {
     width_ = width;
     height_ = height;
-    has_data_ = false;
+    // Keep has_data_/current_data_: the weather task pushes data in the background and Init() runs on every page entry.
     needs_full_refresh_ = true;
     page_index_ = 0;
     firmware_version_.clear();
@@ -163,7 +163,8 @@ void WeatherRenderer::Render(uint8_t* fb, int width, int height) {
     DrawStyledRect(fb, width, {0, Style::kStatusBarHeight, width, height - Style::kStatusBarHeight}, bg_style);
 
     if (!has_data_) {
-        const char* empty_text = "暂无天气数据";
+        const std::string loading_text = "正在获取 " + loading_city_;
+        const char* empty_text = loading_city_.empty() ? "暂无天气数据" : loading_text.c_str();
         const char* hint = "长按刷新";
         int text_w = MeasureTextWidth(empty_text, font_);
         int hint_w = MeasureTextWidth(hint, font_);
@@ -195,6 +196,16 @@ void WeatherRenderer::Render(uint8_t* fb, int width, int height) {
         DrawText(fb, width, location_box.x + (location_box.w - loc_w) / 2,
                  InkCenteredTextTopYInBox(title_font_, location_line.c_str(), location_box.y + 30, 28, 0),
                  location_line.c_str(), title_font_, selected_style.fg);
+
+        const WeatherConfig weather_cfg = weather_api_get_config();
+        if (weather_cfg.cities.size() > 1) {  // "2/5": which city UP/DOWN is showing
+            char idx_buf[24];
+            snprintf(idx_buf, sizeof(idx_buf), "%d/%d", weather_cfg.selected + 1, static_cast<int>(weather_cfg.cities.size()));
+            const int idx_w = MeasureTextWidth(idx_buf, font_);
+            DrawText(fb, width, location_box.x + location_box.w - idx_w - 6,
+                     InkCenteredTextTopY(font_, idx_buf, location_box.y + 11, 0),
+                     idx_buf, font_, selected_style.fg);
+        }
 
         DrawStyledRoundRect(fb, width, height, temp_box, Style::kBorderRadiusMD, card_style);
         char temp_buf[20];
@@ -250,7 +261,7 @@ void WeatherRenderer::Render(uint8_t* fb, int width, int height) {
             current_data_.humidity.empty() ? "--%" : current_data_.humidity + "%",
             current_data_.wind_dir.empty() ? "--" : current_data_.wind_dir,
             current_data_.wind_scale.empty() ? "--级" : current_data_.wind_scale + "级",
-            "弱",
+            current_data_.uv_text.empty() ? "--" : current_data_.uv_text,
         };
         const int metric_x[] = {42, 128, 224, 318};
         for (int i = 0; i < 4; ++i) {
@@ -268,28 +279,34 @@ void WeatherRenderer::Render(uint8_t* fb, int width, int height) {
             page_index_ = forecast_count - 1;
         }
 
-        Rect forecast_panel{28, 214, width - 56, 62};
+        // 7-day strip: weekday, icon, high/low.
+        Rect forecast_panel{8, 214, width - 16, 62};
         DrawStyledRoundRect(fb, width, height, forecast_panel, Style::kBorderRadiusMD, panel_style);
-        const int card_w = forecast_panel.w / 4;
-        for (int i = 0; i < forecast_count && i < 4; ++i) {
+        const int day_count = std::max(1, std::min(7, forecast_count));
+        const int card_w = forecast_panel.w / day_count;
+        for (int i = 0; i < forecast_count && i < 7; ++i) {
             const auto& item = forecast_items[i];
             const int x = forecast_panel.x + i * card_w;
+            const int cx = x + card_w / 2;
             if (i > 0) {
                 for (int y = forecast_panel.y + 8; y < forecast_panel.y + forecast_panel.h - 8; y += 4) {
                     set_pixel(fb, width, x, y, border);
                 }
             }
-            DrawText(fb, width, x + 28,
+            const int label_w = MeasureTextWidth(item.label.c_str(), font_);
+            DrawText(fb, width, cx - label_w / 2,
                      InkCenteredTextTopY(font_, item.label.c_str(), forecast_panel.y + 12, 0),
-                     item.label.c_str(), font_, secondary);
+                     item.label.c_str(), font_, i == 0 ? text : secondary);  // accent is yellow, invisible on the yellow panel
             const char* glyph = IconGlyphForCode(item.icon_code, item.weather_text);
-            const int icon_center_y = forecast_panel.y + 30;
-            DrawIcon(fb, width, x + 34, InkCenteredTextTopY(&weather_icons_16, glyph, icon_center_y, 0),
+            const int icon_w = MeasureTextWidth(glyph, &weather_icons_16);
+            DrawIcon(fb, width, cx - icon_w / 2,
+                     InkCenteredTextTopY(&weather_icons_16, glyph, forecast_panel.y + 31, 0),
                      glyph, &weather_icons_16, accent);
             char temp_range[24];
-            snprintf(temp_range, sizeof(temp_range), "%d/%d°C", static_cast<int>(item.temp_min), static_cast<int>(item.temp_max));
-            DrawText(fb, width, x + 20,
-                     InkCenteredTextTopY(font_, temp_range, forecast_panel.y + 48, 0),
+            snprintf(temp_range, sizeof(temp_range), "%d/%d", static_cast<int>(item.temp_max), static_cast<int>(item.temp_min));
+            const int range_w = MeasureTextWidth(temp_range, font_);
+            DrawText(fb, width, cx - range_w / 2,
+                     InkCenteredTextTopY(font_, temp_range, forecast_panel.y + 49, 0),
                      temp_range, font_, text);
         }
     }
@@ -298,22 +315,29 @@ void WeatherRenderer::Render(uint8_t* fb, int width, int height) {
 }
 
 bool WeatherRenderer::HandleInput(const ButtonEvent& event) {
-    const int max_cards = std::min<int>(4, static_cast<int>(BuildForecastItems(current_data_).size()));
     switch (event.type) {
         case ButtonEvent::kUpClick:
-            if (max_cards > 0) {
-                page_index_ = std::max(0, page_index_ - 1);
-                needs_full_refresh_ = true;
-                return true;
+        case ButtonEvent::kDownClick: {
+            // UP/DOWN cycle through the configured cities (up to 5).
+            const WeatherConfig cfg = weather_api_get_config();
+            const int count = static_cast<int>(cfg.cities.size());
+            if (count < 2) return false;
+            const int step = event.type == ButtonEvent::kUpClick ? count - 1 : 1;
+            const int next = (cfg.selected + step) % count;
+            // New data arrives asynchronously through Update() (synchronously in the simulator), so
+            // enter the loading state first.
+            const std::string previous = loading_city_;
+            const bool had_data = has_data_;
+            loading_city_ = cfg.cities[next].name;
+            has_data_ = false;
+            if (!weather_api_select_city(next)) {
+                loading_city_ = previous;
+                has_data_ = had_data;
+                return false;
             }
-            return false;
-        case ButtonEvent::kDownClick:
-            if (max_cards > 0) {
-                page_index_ = std::min(max_cards - 1, page_index_ + 1);
-                needs_full_refresh_ = true;
-                return true;
-            }
-            return false;
+            needs_full_refresh_ = true;
+            return true;
+        }
         case ButtonEvent::kUpLongPress:
         case ButtonEvent::kDownLongPress:
         case ButtonEvent::kBootLongPress:
@@ -326,9 +350,12 @@ bool WeatherRenderer::HandleInput(const ButtonEvent& event) {
 }
 
 void WeatherRenderer::Update(const WeatherData& data) {
+    // Ignore a late result for a city the user has already switched away from.
+    if (!loading_city_.empty() && data.city != loading_city_) return;
+    loading_city_.clear();
     current_data_ = data;
     has_data_ = true;
-    const int max_cards = std::min<int>(4, static_cast<int>(BuildForecastItems(current_data_).size()));
+    const int max_cards = static_cast<int>(BuildForecastItems(current_data_).size());
     if (page_index_ >= max_cards) {
         page_index_ = max_cards > 0 ? max_cards - 1 : 0;
     }

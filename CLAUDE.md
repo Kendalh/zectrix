@@ -59,7 +59,7 @@ Replaced in the simulator (firmware changes here are NOT exercised by `sim/`):
 | `sim/sim_ui.cc` page switching + key routing | `ui/rawdraw_ui_manager.cc`, `application.cc` | status bar/frame, refresh, timers, slideshow, quick switch |
 | `sim/sim_ui.cc` `BuildSettingsItems()` | settings list built in `application.cc` | real Wi-Fi/LAN/sleep actions; **keep labels and order in sync** |
 | `sim/fake/photo_storage.cc` (in memory) | `common/photo_storage.cc` (SPIFFS + index) | capacity, index corruption, power loss |
-| `sim/fake/weather_api.cc` (icon mapping only) | `common/weather_api.cc` (QWeather HTTP + JSON) | network, JSON parsing |
+| `sim/fake/weather_api_fake.cc` (canned sample, built-in city table) | `common/weather_api.cc` (Open-Meteo HTTPS, task, NVS config) | network, TLS, NVS persistence, config loading |
 | `sim/sim_httpd.cc` (POSIX sockets) | ESP-IDF `esp_http_server` | timeouts, memory, real concurrency |
 | `sim/sim_platform.c` font lookup | LVGL `lv_font_fmt_txt` | kerning is ignored, so spacing may differ by a few px |
 | `sim/shim/*` (esp_log, esp_timer, freertos, wifi, netif, sleep, settings, wifi_manager, gpio) | real IDF and hardware | Wi-Fi/AP, DHCP, NVS, deep sleep, buttons, e-ink refresh |
@@ -72,17 +72,19 @@ Not compiled into the sim at all: `RawDrawUiManager`, `application.cc`, board co
 ## Rules when changing code
 
 1. Make the change in `firmware/main/`. Only touch `sim/` for stand-ins, shims, or sim tooling.
-2. **Keep stand-ins in sync.** `sim/fake/weather_api.cc` duplicates `ParseWeatherIcon` from
-   `firmware/main/common/weather_api.cc`; `sim_ui.cc` duplicates the manager glue and settings list (see
+2. **Keep stand-ins in sync.** `sim/fake/weather_api_fake.cc` implements the `weather_api.h` interface
+   (parsing/validation in `common/weather_parse.cc` is shared, not duplicated); `sim_ui.cc` duplicates the manager glue and settings list (see
    tables above). If you change the signature or behavior of `photo_storage.h` / `weather_api.h`,
    update the matching fake.
 3. **Shims only cover what is used today.** If firmware code starts using a new ESP-IDF/FreeRTOS/LVGL
    API in a file the sim compiles, add the minimal shim in `sim/shim/` (or sim_httpd/sim_platform)
    instead of ifdef-ing the firmware file. Do not add `#ifdef SIM` to firmware sources.
 4. **Host build passing is not device build passing.** Xtensa gcc, real IDF headers and warning flags
-   differ. Run `firmware/scripts/build_local.sh` after a batch of changes (see "Building the firmware");
-   do not claim a change "works on the device" from sim or build results alone. New firmware `.cc` files must
-   also be added to `firmware/main/CMakeLists.txt`.
+   differ. **Do not run `firmware/scripts/build_local.sh` (or `idf.py build`) after every change: a build is
+   slow. Build only when the user asks for it** (see "Building the firmware"); the same goes for uploading a
+   build. Without a build, say that the change was not compiled for the device. Do not claim a change "works on
+   the device" from sim or build results alone. New firmware `.cc` files must also be added to
+   `firmware/main/CMakeLists.txt`.
 5. Separate pure logic/rendering from hardware calls and put hardware behind a thin interface, so the
    logic is shared and the sim supplies a fake for the hardware side. Apply this to new apps.
 6. When reporting results, say which part was verified in the sim and which still needs real hardware.
@@ -106,8 +108,13 @@ python3 sim/web/server.py                     # web UI http://127.0.0.1:8000, de
   verified). **The real board never registers double-click**, so features that depend on `k*DoubleClick`
   events (photo delete dialog, quick-switch overlay) cannot be reached on the device; the sim has no
   double-click either.
-- The device has no weather data source (`weather_api_init` is never called). The sim matches that: the
-  weather page shows "暂无天气数据" unless started with `--demo-weather`.
+- Weather: data source is Open-Meteo (no key). `common/weather_parse.cc` (shared with the sim, unit-tested by
+  `sim/tests/test_weather_parse.cc` in `make -C sim test`) parses it; `weather_api.cc` (firmware only) does HTTPS
+  in its own task. `Application` starts it on Wi-Fi connect via `RawDrawUiManager::StartWeatherService()`.
+  Up to 5 cities (`WeatherConfig`), UP/DOWN on the weather page calls `weather_api_select_city` (async; the sim
+  fake answers synchronously, so `WeatherRenderer` sets its loading state *before* calling it). The sim has no network: `--demo-weather` (or saving a city at `/weather`) pushes a canned sample.
+- Device web UI: `/` is the app-launcher home (`ui/renderers/rawdraw/web_apps.cc`), `/album` the photo page,
+  `/weather` weather settings (`/api/weather`, `/api/weather/search`). New apps: add a card in `web_apps.cc`.
 - `sim_device` runs the real `ApTransferServer` in LAN mode and keeps the album in memory
   (cleared on restart). The device HTTP API is documented in `docs/LAN_PHOTO_PUSH_API.md`. In the sim,
   "传图"/"配网" only show their instruction pages (no hotspot), so the device's conflict between the LAN
@@ -194,7 +201,7 @@ firmware/scripts/upload_firmware.sh        # uploads the newest firmware/release
 - `weather`: AQI number and its label ("38" / "优") overlap.
 
 Check against `weather_detail_renderer.cc` / `weather_renderer.cc` and font `adv_w` before assuming either side is wrong.
-(Seen with `--demo-weather` only now that the default weather page has no data.)
+
 
 ## Git
 

@@ -1,16 +1,9 @@
 /**
  * @file weather_api.h
- * @brief HeWeather (和风天气) API client for ESP32
+ * @brief Weather data model and client (Open-Meteo, no API key)
  *
- * Fetches real-time weather data via HTTP GET. Uses esp_http_client
- * with select()-based timeout (NO setsockopt(SO_RCVTIMEO)).
- *
- * API: https://dev.qweather.com/docs/api/weather/weather-now/
- *
- * Usage:
- * 1. weather_api_init("YOUR_KEY", "hangzhou")
- * 2. Callback receives WeatherData on success
- * 3. Timer triggers hourly auto-refresh
+ * Current conditions + 7-day forecast + air quality over HTTPS, refreshed on a user-chosen
+ * interval. Pure parsing lives in weather_parse.h so the simulator can share it.
  */
 
 #ifndef WEATHER_API_H
@@ -27,30 +20,57 @@
 // ============================================================
 
 /**
- * @brief Parsed weather data from HeWeather API
+ * @brief One day of the daily forecast (up to 7 days)
  */
 struct WeatherForecastDay {
-    std::string label;        // Today / Tomorrow / etc.
+    std::string label;        // 今天 / 明天 / 周X
     std::string weather_text; // 晴 / 多云 / 小雨
-    std::string icon_code;    // QWeather icon code string
+    std::string icon_code;    // QWeather-style icon code string (100 sunny, 101 cloudy, ...)
     int32_t temp_min = 0;
     int32_t temp_max = 0;
+};
+
+struct WeatherHourlyEntry {
+    std::string label;        // "14时"
+    std::string icon_code;
+    std::string weather_text;
+    int32_t temp = 0;
 };
 
 struct WeatherData {
     std::string city;         // City name in Chinese
     std::string temp;         // Current temperature (e.g., "25")
     std::string feels_like;   // Feels like temperature (e.g., "27")
-    std::string weather_icon; // QWeather icon code for current weather (e.g., "100")
+    std::string weather_icon; // Icon code for current weather (e.g., "100")
     std::string weather_text; // Weather condition (e.g., "晴", "多云", "小雨")
     std::string wind_dir;     // Wind direction (e.g., "东南风")
-    std::string wind_scale;   // Wind scale (e.g., "3")
+    std::string wind_scale;   // Wind scale, Beaufort (e.g., "3")
     std::string humidity;     // Humidity percentage (e.g., "45")
-    std::string update_time;  // Last update time (e.g., "14:30")
+    std::string pressure;     // Sea-level pressure in hPa (e.g., "1012")
+    std::string uv_text;      // Today's peak UV level (弱/中等/强/很强/极强)
+    std::string update_time;  // Observation time (e.g., "14:30")
     std::string air_quality;  // Air quality text (e.g., "优")
-    int32_t air_aqi = -1;     // AQI number
-    int32_t temp_int;         // Numeric temperature for icon selection
-    std::vector<WeatherForecastDay> forecast;
+    int32_t air_aqi = -1;     // AQI number (US AQI), -1 when unknown
+    int32_t temp_int = 0;     // Numeric temperature for icon selection
+    std::vector<WeatherForecastDay> forecast;  // up to 7 days, first is today
+    std::vector<WeatherHourlyEntry> hourly;      // every 3 hours, starting now
+};
+
+/** A city returned by the geocoding search. */
+struct WeatherCity {
+    std::string name;     // 杭州市
+    std::string admin;    // 浙江 (province / region, may be empty)
+    std::string lat;      // decimal degrees, kept as text (NVS has no float)
+    std::string lon;
+};
+
+constexpr size_t kMaxWeatherCities = 5;
+
+/** User-selected cities (up to 5), the one shown on the device, and the refresh frequency. Persisted. */
+struct WeatherConfig {
+    std::vector<WeatherCity> cities = {{"杭州", "浙江", "30.2936", "120.1614"}};
+    int selected = 0;         // index into cities; the device page shows this one
+    int interval_min = 30;    // 5, 10 or 30
 };
 
 /**
@@ -73,57 +93,44 @@ enum class WeatherIcon {
 WeatherIcon ParseWeatherIcon(const char* weather_text);
 
 // ============================================================
-// API interface
+// API interface (data source: Open-Meteo, free, no API key)
+//   https://open-meteo.com/en/docs
+//   https://open-meteo.com/en/docs/geocoding-api
+//   https://open-meteo.com/en/docs/air-quality-api
 // ============================================================
 
 /**
- * @brief Callback type for weather data delivery
+ * @brief Callback type for weather data delivery (called on the weather task)
  */
 using WeatherCallback = std::function<void(const WeatherData&)>;
 
 /**
- * @brief Initialize weather API client
+ * @brief Start the background weather task (idempotent).
  *
- * Sets up the hourly auto-refresh timer using esp_timer.
- *
- * @param api_key HeWeather API key
- * @param city_code City location ID (e.g., "101210101" for Hangzhou)
- * @param callback Function called when data arrives
+ * Loads the saved WeatherConfig, fetches the selected city once and then every interval_min minutes.
+ * Call after Wi-Fi is connected; fetches that fail (no network) are retried at the next interval.
  */
-void weather_api_init(const char* api_key, const char* city_code, WeatherCallback callback);
+void weather_api_start(WeatherCallback callback);
 
-/**
- * @brief Trigger a manual weather data fetch
- *
- * @return true if request started, false if already in progress
- */
+/** Request an immediate refresh. @return false if the task is not running. */
 bool weather_api_fetch_now();
 
-/**
- * @brief Change the city
- *
- * @param city_code New city location ID
- */
-void weather_api_set_city(const char* city_code);
+/** Current configuration (persisted). */
+WeatherConfig weather_api_get_config();
+
+/** Validate, persist and apply a new configuration, then refresh now. @return false if invalid. */
+bool weather_api_set_config(const WeatherConfig& config);
 
 /**
- * @brief Set the API key
+ * Switch the shown city (device UP/DOWN). Persisted; non-blocking: the result (cached data when
+ * fresh, otherwise a new fetch) arrives through the callback. @return false if index is invalid.
  */
-void weather_api_set_key(const char* api_key);
+bool weather_api_select_city(int index);
 
-/**
- * @brief Get the current city code
- */
-const char* weather_api_get_city();
+/** Search cities by name (Chinese or English). Blocking HTTP call. @return false on network/parse error. */
+bool weather_api_search_city(const char* url_encoded_query, std::vector<WeatherCity>* out);
 
-/**
- * @brief Check if API client is initialized
- */
-bool weather_api_is_ready();
-
-/**
- * @brief Get the last fetched weather data
- */
-const WeatherData* weather_api_get_last_data();
+/** Copy of the last fetched data. @return false if nothing has been fetched yet. */
+bool weather_api_get_last_data(WeatherData* out);
 
 #endif  // WEATHER_API_H

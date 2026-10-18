@@ -98,7 +98,7 @@ void HomeRenderer::Render(uint8_t* fb, int width, int height) {
 
     FooterBar footer;
     footer.SetBounds(width, height);
-    footer.SetText("UP/DN选择", nullptr, "BOOT打开");
+    footer.SetText("UP/DN选择(可连按)", nullptr, "BOOT打开");
     footer.Draw(fb, width, height);
 
     needs_full_refresh_ = false;

@@ -33,6 +33,13 @@ static constexpr const char* kRawDrawThemeNvsKey = "rawdraw_theme";
 // it disabled for now. To restore minute-by-minute clock updates later, flip
 // this to true after a safe status-bar-only refresh path exists.
 static constexpr bool kEnableMinuteClockRefresh = false;
+// Home-page and photo-gallery UP/DOWN only move a cursor/selection, and reaching the wanted item takes
+// several presses while a four-color refresh takes ~16 s. These presses are never locked out; one refresh
+// is requested this long after the last press (the UI pump then runs it within ~1 s).
+static constexpr int kCursorRefreshDelayMs = 800;
+// Safety net: a four-color refresh takes ~16 s. If the display never reports idle (a refresh path that
+// forgot to), do not keep swallowing button presses longer than this.
+static constexpr int64_t kInputLockTimeoutMs = 30000;
 
 namespace ui {
 
@@ -704,6 +711,17 @@ void RawDrawUiManager::ShowWifiConfigPage(const std::string& ssid,
     SwitchPage(RawDrawPageId::APTransfer);
 }
 
+void RawDrawUiManager::StartWeatherService() {
+    weather_api_start([this](const WeatherData& data) {
+        // Runs on the weather task, like the HTTP server callbacks above.
+        if (weather_renderer_) weather_renderer_->Update(data);
+        if (weather_detail_renderer_) weather_detail_renderer_->Update(data);
+        if (current_page_ == RawDrawPageId::Weather || current_page_ == RawDrawPageId::WeatherDetail) {
+            RequestActivePageRefresh();
+        }
+    });
+}
+
 bool RawDrawUiManager::StartLanHttpServer(const std::string& ip_address) {
     if (!ap_transfer_server_) return false;
     return ap_transfer_server_->StartLan(ip_address);
@@ -721,9 +739,22 @@ void RawDrawUiManager::StopLanHttpServer() {
 
 bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
     const bool navigation_click = IsNavigationClick(event);
-    if (navigation_click && input_refresh_locked_.load(std::memory_order_acquire)) {
-        ESP_LOGI(kTag, "Navigation click ignored until current refresh completes: type=%d", event.type);
-        return true;
+    if (navigation_click) {
+        ESP_LOGW(kTag, "[TIMING] HandleInput nav click type=%d locked=%d t=%u", event.type,
+                 (int)input_refresh_locked_.load(std::memory_order_acquire),
+                 (unsigned)(esp_timer_get_time() / 1000));
+    }
+    const bool cursor_click =
+        (current_page_ == RawDrawPageId::Home || current_page_ == RawDrawPageId::Gallery) &&
+        (event.type == rawdraw::ButtonEvent::kUpClick || event.type == rawdraw::ButtonEvent::kDownClick);
+    if (navigation_click && !cursor_click && input_refresh_locked_.load(std::memory_order_acquire)) {
+        const int64_t held_ms = esp_timer_get_time() / 1000 - input_lock_since_ms_.load(std::memory_order_acquire);
+        if (held_ms < kInputLockTimeoutMs) {
+            ESP_LOGI(kTag, "Navigation click ignored until current refresh completes: type=%d", event.type);
+            return true;
+        }
+        ESP_LOGW(kTag, "Input lock held %lld ms without a refresh-idle event; releasing it", (long long)held_ms);
+        input_refresh_locked_.store(false, std::memory_order_release);
     }
 
     if (event.type == rawdraw::ButtonEvent::kBootLongPress) {
@@ -841,7 +872,16 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
     bool handled = renderer->HandleInput(event);
 
     if (handled) {
+        if (cursor_click) {
+            // Cursor/selection already moved in the renderer; coalesce presses into one refresh.
+            ArmTransientRefreshTimer(kCursorRefreshDelayMs);
+            return true;
+        }
+        if (transient_refresh_timer_ != nullptr) {
+            esp_timer_stop(transient_refresh_timer_);  // this path refreshes now
+        }
         if (navigation_click) {
+            input_lock_since_ms_.store(esp_timer_get_time() / 1000, std::memory_order_release);
             input_refresh_locked_.store(true, std::memory_order_release);
         }
         // Re-render the framebuffer with updated state
@@ -851,14 +891,17 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
             if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
 
             // Clear and re-render everything
+            ESP_LOGW(kTag, "[TIMING] render start t=%u", (unsigned)(esp_timer_get_time() / 1000));
             rawdraw::Clear(fb, width_, height_);
             RenderAll(fb, width_, height_);
+            ESP_LOGW(kTag, "[TIMING] render done t=%u", (unsigned)(esp_timer_get_time() / 1000));
 
             if (mutex) xSemaphoreGive(mutex);
 
             if (!TryDisplayCurrentPhotoRaw4Color()) {
                 TriggerRefresh(false);
             }
+            ESP_LOGW(kTag, "[TIMING] refresh requested t=%u", (unsigned)(esp_timer_get_time() / 1000));
         }
     }
 

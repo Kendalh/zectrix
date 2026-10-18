@@ -28,6 +28,15 @@ SimUi::SimUi(const Options& options) : options_(options) {
 
     BuildSettingsItems();
     home_.Init(sim::kW, sim::kH);
+
+    // Same as RawDrawUiManager::StartWeatherService(): the weather "task" pushes data to both pages.
+    weather_api_start([this](const WeatherData& data) {
+        std::lock_guard<std::recursive_mutex> lock(mu_);
+        weather_.Update(data);
+        weather_detail_.Update(data);
+    });
+    // The device fetches once Wi-Fi is up; the simulator only does so when asked to preview the layout.
+    if (options_.demo_weather) weather_api_fetch_now();
 }
 
 const char* SimUi::PageName(RawDrawPageId page) {
@@ -79,11 +88,6 @@ void SimUi::SwitchPage(RawDrawPageId page) {
     if (auto* r = RendererFor(page)) {
         r->Init(sim::kW, sim::kH);
         r->MarkFullRefresh();
-    }
-    // The device has no weather data source yet; only feed data when asked to preview the layout.
-    if (options_.demo_weather) {
-        if (page == RawDrawPageId::Weather) weather_.Update(sim::MakeWeather());
-        if (page == RawDrawPageId::WeatherDetail) weather_detail_.Update(sim::MakeWeather());
     }
     current_ = page;
 }

@@ -331,38 +331,8 @@ void PhotoGalleryRenderer::RenderMemoryCardMode(uint8_t* fb, int width, int heig
     const int gap = 8;
     const int info_x = 12;
 
-    // Compute adaptive left panel width based on content (chat bubble style)
-    // Min width for empty state, max width to leave enough space for photo
-    const int left_w_min = 120;
-    const int left_w_max = 200;
-    int left_w = left_w_min;
-
-    if (!photo_ids_.empty()) {
-        const PhotoEntry& entry = photo_ids_[selected_index_];
-        // Estimate required width from title + body + meta block
-        const std::string title_text = entry.title[0] ? entry.title : "那年今日";
-        const std::string body_text = entry.body[0] ? entry.body : "暂无文案";
-        const std::string date_text = entry.date[0] ? entry.date : "日期未知";
-        const std::string location_text = entry.location[0] ? entry.location : "地点未知";
-
-        int max_text_w = 0;
-        // Title lines (2 max)
-        auto title_lines = WrapText(title_text, title_font_, left_w_max - 24, 2);
-        for (const auto& line : title_lines) {
-            max_text_w = std::max(max_text_w, MeasureTextWidth(line.c_str(), title_font_));
-        }
-        // Body lines (5 max)
-        auto body_lines = WrapText(body_text, font_, left_w_max - 24, 5);
-        for (const auto& line : body_lines) {
-            max_text_w = std::max(max_text_w, MeasureTextWidth(line.c_str(), font_));
-        }
-        // Meta block (date + location)
-        max_text_w = std::max(max_text_w, MeasureTextWidth(date_text.c_str(), font_));
-        max_text_w = std::max(max_text_w, MeasureTextWidth(location_text.c_str(), font_));
-
-        // Add padding: chip (64), padding (24 each side)
-        left_w = std::min(left_w_max, std::max(left_w_min, max_text_w + 24));
-    }
+    // Left info : photo = 2 : 3
+    const int left_w = (width - info_x - 12 - gap) * 2 / 5;
 
     const int photo_x = info_x + left_w + gap;
     const int photo_w = width - photo_x - 12;
@@ -372,7 +342,6 @@ void PhotoGalleryRenderer::RenderMemoryCardMode(uint8_t* fb, int width, int heig
     const auto& theme = ThemeManager::Get();
     const PaintStyle bg_style = theme.Style(ThemeToken::BackgroundPrimary);
     const PaintStyle card_style = theme.Component(ComponentRole::CardDefault);
-    const PaintStyle badge_style = theme.Style(ThemeToken::Badge);
     const Color text = theme.ColorFor(ThemeToken::TextPrimary);
     const Color secondary = theme.ColorFor(ThemeToken::TextSecondary);
 
@@ -411,16 +380,7 @@ void PhotoGalleryRenderer::RenderMemoryCardMode(uint8_t* fb, int width, int heig
     const int text_x = info_x + 12;
     const int text_w = left_w - 24;
     int y = card_y + 20;
-    const char* chip_text = "往年今日";
-    const int chip_text_w = MeasureTextWidth(chip_text, font_);
-    Rect chip{text_x, y, std::min(text_w, chip_text_w + 24), 22};
-    DrawStyledRoundRect(fb, width, height, chip, Style::kBorderRadiusSM, badge_style);
-    DrawStyledText(fb, width, chip.x + (chip.w - chip_text_w) / 2,
-                   InkCenteredTextTopYInBox(font_, "往年今日", chip.y, chip.h, 0),
-                   chip_text, font_, badge_style, height);
-    y += 32;
-
-    auto title_lines = WrapText(entry.title[0] ? entry.title : "那年今日", title_font_, text_w, 2);
+    auto title_lines = WrapText(entry.title[0] ? entry.title : "未命名", title_font_, text_w, 2);
     constexpr int kTitleLineBoxH = 24;
     for (const auto& line : title_lines) {
         DrawText(fb, width, text_x, InkCenteredTextTopYInBox(title_font_, line.c_str(), y, kTitleLineBoxH, 0),
@@ -462,7 +422,7 @@ void PhotoGalleryRenderer::RenderMemoryCardMode(uint8_t* fb, int width, int heig
     footer.SetBounds(width, height);
     char counter[40];
     snprintf(counter, sizeof(counter), "%d/%d", selected_index_ + 1, GetPhotoCount());
-    footer.SetText("UP/DN翻页", counter, "BOOT看详情");
+    footer.SetText("UP/DN翻页(可连按)", counter, "BOOT看详情");
     footer.Draw(fb, width, height);
 }
 
