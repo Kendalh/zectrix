@@ -6,6 +6,8 @@
 #include "web_apps.h"
 
 #include "common/ai_chat.h"
+#include "common/chinese_calendar.h"
+#include "common/reminders.h"
 #include "common/weather_api.h"
 
 #include <cJSON.h>
@@ -41,9 +43,11 @@ const char kHomeHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"
 <div class="top"><div><div class="brand">墨水屏设置</div><div class="muted" id="ep"></div></div></div>
 <a class="panel card" href="/album"><div class="t">相册 · 传图</div><div class="muted">上传照片、填写名字、管理设备相册和轮播周期</div></a>
 <a class="panel card" href="/weather"><div class="t">天气</div><div class="muted" id="wsum">管理最多 5 个城市和刷新频率</div></a>
+<a class="panel card" href="/calendar"><div class="t">日历 · 提醒事项</div><div class="muted" id="csum">为日期添加提醒，设备日历上会显示铃铛图标</div></a>
 <a class="panel card" href="/ai"><div class="t">AI 问答 · Key 设置</div><div class="muted">填写阿里云百炼的 API Key（提问在设备上用语音完成）</div></a>
 </main><script>
 fetch('/status').then(r=>r.json()).then(j=>{document.getElementById('ep').textContent=j.ip}).catch(()=>{});
+fetch('/api/reminders').then(r=>r.json()).then(j=>{const n=Object.keys(j.reminders).length;if(n)document.getElementById('csum').textContent='共 '+n+' 天有提醒'}).catch(()=>{});
 fetch('/api/weather').then(r=>r.json()).then(j=>{document.getElementById('wsum').textContent=j.cities[j.selected].name+' · 共 '+j.cities.length+' 个城市 · '+j.interval+' 分钟刷新'}).catch(()=>{});
 </script></body></html>)HTML";
 
@@ -89,7 +93,73 @@ $('save').onclick=async()=>{const iv=+document.querySelector('input[name=iv]:che
 load();
 </script></body></html>)HTML";
 
-const char kAiHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>AI 问答设置</title>
+const char kCalendarHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>日历提醒</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>%STYLE%
+.nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.nav b{font-size:16px}
+.nav button{border:2px solid #111;background:#fff;border-radius:5px;padding:4px 12px;font-size:15px;font-weight:800;cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}.wd{text-align:center;background:#111;color:#fff;font-size:12px;padding:3px 0;border-radius:3px}.wd.we{color:#ffd900}
+.day{position:relative;height:44px;border:1px solid #bbb;border-radius:4px;background:#fff;font-size:14px;cursor:pointer;padding:0}
+.day.we{color:#e0201b}.day.today{background:#ffd900;border-color:#ffd900;color:#111;font-weight:800}.day.sel{outline:3px solid #e0201b;outline-offset:1px}.day.off{visibility:hidden}
+.day .bell{position:absolute;top:1px;right:3px;font-size:11px}.day .fest{position:absolute;bottom:2px;left:0;right:0;font-size:10px;color:#e0a800;line-height:1}.day.today .fest{color:#111}.day.today .bell{filter:grayscale(1)}
+.legend{font-size:11px;color:#555;margin-top:8px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 3px 0 8px;vertical-align:-1px}.item{display:flex;gap:6px;margin-top:6px}.item input{flex:1;min-width:0;padding:8px;border:1px solid #111;font-size:14px}
+.item button{border:1px solid #111;background:#fff;border-radius:4px;padding:5px 9px;cursor:pointer}
+.up{display:block;width:100%;text-align:left;background:#fff;border:1px solid #111;padding:8px;margin-top:6px;border-radius:4px;font-size:13px;cursor:pointer}
+</style></head><body><main class="app">
+<div class="top"><div><div class="brand">日历提醒</div><div class="muted">设备上：UP/DOWN 翻月，BOOT 回本月 / 看今日提醒</div></div><a class="btn secondary" href="/" style="text-decoration:none">首页</a></div>
+<section class="panel"><div class="nav"><button id="prev">‹</button><b id="ym"></b><span><button id="now" style="font-size:12px">今天</button> <button id="next">›</button></span></div>
+<div class="grid" id="grid"></div>
+<div class="legend"><i style="background:#ffd900"></i>今天<i style="background:#e0a800"></i>节日名<i style="background:#e0201b"></i>周末（数字）<span style="margin-left:8px">🔔 有提醒</span></div></section>
+<section class="panel"><b id="dt"></b><div id="items"></div>
+<div class="row" style="margin-top:10px"><button class="btn secondary" id="add">添加一条</button><button class="btn" id="save">保存</button><span id="msg" class="muted"></span></div></section>
+<section class="panel"><b>即将到来的提醒</b><div id="upcoming"></div></section>
+</main><script>
+const $=id=>document.getElementById(id),WD=['日','一','二','三','四','五','六'];
+const pad=n=>String(n).padStart(2,'0'),key=(y,m,d)=>y+'-'+pad(m)+'-'+pad(d);
+let fest={},festYears={},data={},lim={perDay:6,textBytes:96},now=new Date(),vy=now.getFullYear(),vm=now.getMonth()+1,sel=key(now.getFullYear(),now.getMonth()+1,now.getDate()),draft=[];
+const todayKey=sel;
+function msg(t){$('msg').textContent=t}
+function select(k){sel=k;draft=(data[k]||[]).slice();msg('');renderAll()}
+function loadFest(y){if(festYears[y])return;festYears[y]=1;fetch('/api/festivals?year='+y).then(r=>r.json()).then(j=>{if(j.success){Object.assign(fest,j.festivals);renderAll()}}).catch(()=>{festYears[y]=0})}
+function renderGrid(){loadFest(vy);$('ym').textContent=vy+'年'+vm+'月';const g=$('grid');g.innerHTML='';
+ WD.forEach((w,i)=>{const e=document.createElement('div');e.className='wd'+(i===0||i===6?' we':'');e.textContent=w;g.appendChild(e)});
+ const first=new Date(vy,vm-1,1).getDay(),days=new Date(vy,vm,0).getDate();
+ for(let i=0;i<first;i++){const e=document.createElement('div');e.className='day off';g.appendChild(e)}
+ for(let d=1;d<=days;d++){const k=key(vy,vm,d),b=document.createElement('button');
+  const wd=(first+d-1)%7;b.className='day'+(wd===0||wd===6?' we':'')+(k===todayKey?' today':'')+(k===sel?' sel':'');b.textContent=d;
+  if(fest[k]){const f=document.createElement('span');f.className='fest';f.textContent=fest[k][0];b.appendChild(f)}
+  if(data[k]){const s=document.createElement('span');s.className='bell';s.textContent='🔔';b.appendChild(s)}
+  b.onclick=()=>select(k);g.appendChild(b)}}
+function renderEditor(){const p=sel.split('-').map(Number);
+ $('dt').textContent=p[0]+'年'+p[1]+'月'+p[2]+'日 周'+WD[new Date(p[0],p[1]-1,p[2]).getDay()]+(sel===todayKey?'（今天）':'')+(fest[sel]?' · '+fest[sel].join(' '):'');
+ const box=$('items');box.innerHTML='';
+ if(!draft.length){const e=document.createElement('div');e.className='muted';e.style.marginTop='6px';e.textContent='这一天还没有提醒';box.appendChild(e)}
+ draft.forEach((t,i)=>{const d=document.createElement('div');d.className='item';
+  const inp=document.createElement('input');inp.type='text';inp.value=t;inp.placeholder='提醒内容，如 09:30 开会';inp.oninput=()=>{draft[i]=inp.value};
+  const x=document.createElement('button');x.textContent='删除';x.onclick=()=>{draft.splice(i,1);renderEditor()};
+  d.appendChild(inp);d.appendChild(x);box.appendChild(d)});
+ $('add').disabled=draft.length>=lim.perDay}
+function renderUpcoming(){const box=$('upcoming');box.innerHTML='';
+ const ks=Object.keys(data).filter(k=>k>=todayKey).sort();
+ if(!ks.length){const e=document.createElement('div');e.className='muted';e.style.marginTop='6px';e.textContent='暂无';box.appendChild(e)}
+ ks.forEach(k=>{const b=document.createElement('button');b.className='up';b.textContent=k+'  '+data[k].join('；');
+  b.onclick=()=>{const p=k.split('-').map(Number);vy=p[0];vm=p[1];select(k)};box.appendChild(b)})}
+function renderAll(){renderGrid();renderEditor();renderUpcoming()}
+function apply(j){data=j.reminders;if(j.limits)lim=j.limits}
+$('prev').onclick=()=>{vm--;if(vm<1){vm=12;vy--}renderGrid()};
+$('next').onclick=()=>{vm++;if(vm>12){vm=1;vy++}renderGrid()};
+$('now').onclick=()=>{vy=now.getFullYear();vm=now.getMonth()+1;select(todayKey)};
+$('add').onclick=()=>{if(draft.length<lim.perDay){draft.push('');renderEditor();const l=document.querySelectorAll('#items input');l[l.length-1].focus()}};
+const ERR={bad_date:'日期无效（支持 2000–2099 年）',too_many:'每天提醒条数已达上限',text_too_long:'有一条太长了',bad_text:'内容含有无效字符',too_many_dates:'有提醒的日期太多了，请先删除一些',save_failed:'设备保存失败',bad_json:'请求无效'};
+$('save').onclick=async()=>{const items=draft.map(s=>s.trim()).filter(Boolean),enc=new TextEncoder();
+ if(items.some(s=>enc.encode(s).length>lim.textBytes)){msg('每条最长 '+lim.textBytes+' 字节（约 '+Math.floor(lim.textBytes/3)+' 个汉字）');return}
+ $('save').disabled=true;msg('保存中...');
+ try{const r=await fetch('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:sel,items})});const j=await r.json();
+  if(j.success){apply(j);draft=(data[sel]||[]).slice();msg('已保存'+(items.length?'':'（该日提醒已清空）'));renderAll()}else msg('保存失败：'+(ERR[j.error]||j.error||'未知错误'))}
+ catch(e){msg('网络错误')}$('save').disabled=false};
+fetch('/api/reminders').then(r=>r.json()).then(j=>{apply(j);draft=(data[sel]||[]).slice();renderAll()}).catch(()=>{renderAll();msg('读取失败（设备离线？）')});
+</script></body></html>)HTML";
+
+const char kAiHtml[] =R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>AI 问答设置</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>%STYLE%</style></head><body><main class="app">
 <div class="top"><div><div class="brand">AI 问答设置</div><div class="muted">提问和管理会话都在设备上：进入"AI 问答"，长按 UP 说话</div></div><a class="btn secondary" href="/" style="text-decoration:none">首页</a></div>
 <section class="panel"><b>阿里云百炼 API Key</b> <span class="muted" id="keyst"></span><div class="muted" style="margin:4px 0 8px">同一个 Key 同时用于语音识别（Qwen3-ASR）和回答（Qwen-Flash）。保存在设备上，不会再显示出来。</div>
@@ -257,6 +327,81 @@ esp_err_t WeatherSearchHandler(httpd_req_t* req) {
         cJSON_AddStringToObject(item, "lat", c.lat.c_str());
         cJSON_AddStringToObject(item, "lon", c.lon.c_str());
         cJSON_AddItemToArray(list, item);
+    }
+    return SendJsonTree(req, root);
+}
+
+// ---- Calendar reminders -------------------------------------------------------------------------
+
+esp_err_t CalendarPageHandler(httpd_req_t* req) { return SendPage(req, kCalendarHtml); }
+
+esp_err_t RemindersHandler(httpd_req_t* req) {
+    auto& store = reminders::Store::Shared();
+    if (req->method == HTTP_POST) {
+        cJSON* body = ReadBody(req, 4096);
+        if (!body) return SendError(req, "bad_json");
+        cJSON* date = cJSON_GetObjectItemCaseSensitive(body, "date");
+        cJSON* items = cJSON_GetObjectItemCaseSensitive(body, "items");
+        int y = 0, m = 0, d = 0;
+        if (!cJSON_IsString(date) || !reminders::ParseDateKey(date->valuestring, &y, &m, &d)) {
+            cJSON_Delete(body);
+            return SendError(req, reminders::SetResultName(reminders::SetResult::BadDate));
+        }
+        if (!cJSON_IsArray(items)) {
+            cJSON_Delete(body);
+            return SendError(req, "bad_json");
+        }
+        std::vector<std::string> list;
+        cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, items) {
+            if (!cJSON_IsString(item)) {
+                cJSON_Delete(body);
+                return SendError(req, "bad_json");
+            }
+            list.push_back(item->valuestring);
+        }
+        cJSON_Delete(body);
+        const reminders::SetResult result = store.Set(y, m, d, list);
+        if (result != reminders::SetResult::Ok) {
+            ESP_LOGW(kTag, "Rejected reminders: %s", reminders::SetResultName(result));
+            return SendError(req, reminders::SetResultName(result));
+        }
+    }
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON* all = cJSON_AddObjectToObject(root, "reminders");
+    for (const auto& [key, items] : store.All()) {
+        cJSON* list = cJSON_AddArrayToObject(all, key.c_str());
+        for (const auto& text : items) cJSON_AddItemToArray(list, cJSON_CreateString(text.c_str()));
+    }
+    cJSON* limits = cJSON_AddObjectToObject(root, "limits");
+    cJSON_AddNumberToObject(limits, "perDay", reminders::kMaxPerDay);
+    cJSON_AddNumberToObject(limits, "textBytes", reminders::kMaxTextBytes);
+    return SendJsonTree(req, root);
+}
+
+esp_err_t FestivalsHandler(httpd_req_t* req) {
+    char query[64] = {};
+    char value[16] = {};
+    int year = 0;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "year", value, sizeof(value)) == ESP_OK) {
+        year = atoi(value);
+    }
+    if (year < cncal::kMinYear || year > cncal::kMaxYear) return SendError(req, "bad_date");
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON* all = cJSON_AddObjectToObject(root, "festivals");
+    for (int month = 1; month <= 12; ++month) {
+        for (int day = 1; day <= reminders::DaysInMonth(year, month); ++day) {
+            const char* names[cncal::kMaxFestivalsPerDay];
+            const int n = cncal::FestivalsOn(year, month, day, names, cncal::kMaxFestivalsPerDay);
+            if (n == 0) continue;
+            cJSON* list = cJSON_AddArrayToObject(all, reminders::DateKey(year, month, day).c_str());
+            for (int i = 0; i < n; ++i) cJSON_AddItemToArray(list, cJSON_CreateString(names[i]));
+        }
     }
     return SendJsonTree(req, root);
 }

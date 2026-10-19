@@ -224,6 +224,7 @@ const char* RawDrawUiManager::GetPageTitle(RawDrawPageId page) {
         case RawDrawPageId::Home:     return "首页";
         case RawDrawPageId::Voice:    return "语音";
         case RawDrawPageId::AiChat:   return "AI 问答";
+        case RawDrawPageId::CalendarApp: return "日历";
         default:               return "未知";
     }
 }
@@ -245,6 +246,13 @@ RawDrawUiManager::RawDrawUiManager()
     clock_.SetColor(rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::Accent).fg);
     voice_renderer_ = std::make_unique<rawdraw::VoiceRenderer>();
     ai_chat_renderer_ = std::make_unique<rawdraw::AiChatRenderer>();
+    calendar_app_renderer_ = std::make_unique<rawdraw::CalendarAppRenderer>();
+    // Reminders live in a file on the SPIFFS partition (mounted before this constructor runs, see
+    // Application). A browser edit while the calendar is on screen redraws it.
+    reminders::Store::Shared().SetPersistence(reminders::NewFilePersistence("/spiffs/reminders.json"));
+    reminders::Store::Shared().SetOnChange([this]() {
+        if (current_page_ == RawDrawPageId::CalendarApp) RequestActivePageRefresh();
+    });
     home_renderer_ = std::make_unique<rawdraw::HomeRenderer>();
     home_renderer_->SetLaunchCallback([this](const AppEntry& app) { app_shell_.Launch(app); });
     AppShell::Host shell_host;
@@ -585,6 +593,7 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::Home:     return home_renderer_.get();
         case RawDrawPageId::Voice:    return voice_renderer_.get();
         case RawDrawPageId::AiChat:   return ai_chat_renderer_.get();
+        case RawDrawPageId::CalendarApp: return calendar_app_renderer_.get();
         default:               return nullptr;
     }
 }
@@ -750,6 +759,7 @@ void RawDrawUiManager::StartAiChatService() {
 bool RawDrawUiManager::StartLanHttpServer(const std::string& ip_address) {
     if (!ap_transfer_server_) return false;
     if (ai_chat_renderer_) ai_chat_renderer_->SetAddress(ip_address);  // shown as the page to open on the AI page
+    if (calendar_app_renderer_) calendar_app_renderer_->SetAddress(ip_address);  // and on the calendar page
     return ap_transfer_server_->StartLan(ip_address);
 }
 

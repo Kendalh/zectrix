@@ -150,6 +150,7 @@ static inline uint32_t utf8_next(const char** pp) {
 FONT_DECLARE(SourceHanSansSC_Regular_slim);
 FONT_DECLARE(SourceHanSansSC_Medium_slim);
 FONT_DECLARE(font_zectrix_16_1);
+FONT_DECLARE(font_festival_12);  // 12 px subset: only the characters of the festival names (chinese_calendar.cc)
 FONT_DECLARE(font_zectrix_48_1);
 FONT_DECLARE(weather_icons_16);
 FONT_DECLARE(weather_icons_48);

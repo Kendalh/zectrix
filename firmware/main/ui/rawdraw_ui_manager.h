@@ -18,6 +18,7 @@
 #include "ui/renderers/rawdraw/home_renderer.h"
 #include "ui/renderers/rawdraw/voice_renderer.h"
 #include "ui/renderers/rawdraw/ai_chat_renderer.h"
+#include "ui/renderers/rawdraw/calendar_app_renderer.h"
 #include "ui/renderers/rawdraw/chat_renderer.h"
 #include "ui/renderers/rawdraw/settings_renderer.h"
 #include "ui/renderers/rawdraw/ebook_renderer.h"
@@ -432,6 +433,7 @@ private:
     std::unique_ptr<rawdraw::HomeRenderer> home_renderer_;
     std::unique_ptr<rawdraw::VoiceRenderer> voice_renderer_;
     std::unique_ptr<rawdraw::AiChatRenderer> ai_chat_renderer_;
+    std::unique_ptr<rawdraw::CalendarAppRenderer> calendar_app_renderer_;
     std::unique_ptr<rawdraw::ChatRenderer> chat_renderer_;
     std::unique_ptr<rawdraw::EbookRenderer> ebook_renderer_;
     std::unique_ptr<rawdraw::WifiRenderer> wifi_renderer_;

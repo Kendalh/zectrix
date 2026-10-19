@@ -11,18 +11,24 @@ import os
 import subprocess
 import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 SIM = Path(__file__).resolve().parent.parent
 PORT = 18080
+TODAY = "2026-10-19"
+REMINDERS_FILE = "/tmp/sim_test_reminders.json"
 os.environ["SIM_AI_FAKE"] = "1"  # AI app: canned answers, no network, no real API key
 
 
 class Device:
     def __init__(self):
+        # Own reminders file and a fixed date: the tests must not touch the user's data or depend on the clock.
+        Path(REMINDERS_FILE).unlink(missing_ok=True)
         self.proc = subprocess.Popen(
-            [str(SIM / "build" / "sim_device"), "--http-port", str(PORT), "--out", "/tmp"],
+            [str(SIM / "build" / "sim_device"), "--http-port", str(PORT), "--out", "/tmp",
+             "--reminders-file", REMINDERS_FILE, "--today", TODAY],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         assert self.proc.stdout.readline().startswith("READY")
 
@@ -59,14 +65,14 @@ class NavigationTest(unittest.TestCase):
         page, _, _ = self.dev.cmd("reset")
         self.assertEqual(page, "home")
 
-    # App order: 相册, 天气, 语音, AI 问答, 配网, 设置
+    # App order: 相册, 天气, 日历, 语音, AI 问答, 配网, 设置
     def open_app(self, index):
         for _ in range(index):
             self.dev.keys("down")
         return self.dev.keys("boot")
 
     def test_each_app_opens_and_boot_long_returns_home(self):
-        expected = ["gallery", "weather", "voice", "ai_chat", "ap_transfer", "settings"]
+        expected = ["gallery", "weather", "calendar", "voice", "ai_chat", "ap_transfer", "settings"]
         for index, page in enumerate(expected):
             with self.subTest(app=index):
                 self.assertEqual(self.open_app(index), page)
@@ -76,10 +82,10 @@ class NavigationTest(unittest.TestCase):
 
     def test_home_scrolls_to_apps_beyond_the_fifth(self):
         home = self.dev.cmd("reset")[2]
-        for _ in range(5):
+        for _ in range(6):
             self.dev.keys("down")
         self.assertNotEqual(self.dev.cmd("screen")[2], home)  # the list scrolled
-        self.assertEqual(self.dev.keys("boot"), "settings")  # 6th app
+        self.assertEqual(self.dev.keys("boot"), "settings")  # 7th app
 
     def test_selection_wraps(self):
         self.assertEqual(self.dev.keys("up", "boot"), "settings")  # last entry: 设置
@@ -169,7 +175,7 @@ class VoiceAppTest(unittest.TestCase):
     def test_boot_long_returns_home_and_stops_recording(self):
         self.dev.cmd("key uplong")
         self.assertEqual(self.dev.keys("bootlong"), "home")
-        self.dev.keys("down", "down")  # 语音 is the 3rd app
+        self.dev.keys("down", "down", "down")  # 语音 is the 4th app
         self.assertEqual(self.dev.keys("boot"), "voice")
         idle = self.dev.cmd("screen")[2]
         # a new recording can start: the earlier one was stopped when the page was left
@@ -235,7 +241,7 @@ class AiChatAppTest(unittest.TestCase):
 
     def test_app_opens_from_home(self):
         self.dev.cmd("reset")
-        self.dev.keys("down", "down", "down")  # 相册, 天气, 语音, AI 问答
+        self.dev.keys("down", "down", "down", "down")  # 相册, 天气, 日历, 语音, AI 问答
         self.assertEqual(self.dev.keys("boot"), "ai_chat")
         self.assertEqual(self.dev.keys("bootlong"), "home")
 
@@ -374,6 +380,98 @@ class AiChatPagingTest(unittest.TestCase):
         second = self.dev.cmd("key down")[2]
         self.assertNotEqual(second, first)
         self.assertEqual(self.dev.cmd("key up")[2], first)
+
+
+class CalendarAppTest(unittest.TestCase):
+    """日历: month grid with a bell on dates that have reminders. The sim date is fixed to TODAY (2026-10-19)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dev = Device()
+        cls.base = f"http://127.0.0.1:{PORT}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+
+    def setUp(self):
+        self.dev.cmd("reset")
+        self.clear("2026-10-19")
+        self.clear("2026-10-20")
+        self.dev.cmd("jump calendar")
+
+    def api(self, date, items):
+        req = urllib.request.Request(f"{self.base}/api/reminders", method="POST",
+                                     data=json.dumps({"date": date, "items": items}).encode())
+        try:
+            return json.load(urllib.request.urlopen(req))
+        except urllib.error.HTTPError as e:  # SendError answers 200, but be explicit about other codes
+            return json.load(e)
+
+    def clear(self, date):
+        self.assertTrue(self.api(date, [])["success"])
+
+    def screen(self):
+        return self.dev.cmd("screen")[2]
+
+    def test_up_down_change_month_and_boot_returns_to_current_month(self):
+        current = self.screen()
+        self.assertNotEqual(self.dev.cmd("key down")[2], current)
+        self.assertNotEqual(self.dev.cmd("key down")[2], current)
+        self.assertEqual(self.dev.cmd("key boot")[2], current)  # BOOT from another month: back to this one
+        self.dev.cmd("key up")
+        self.assertEqual(self.dev.cmd("key down")[2], current)  # previous then next is a round trip
+
+    def test_boot_in_current_month_shows_today_and_boot_returns(self):
+        month = self.screen()
+        today = self.dev.cmd("key boot")[2]
+        self.assertNotEqual(today, month)
+        self.assertEqual(self.dev.cmd("key boot")[2], month)
+
+    def test_today_view_lists_todays_reminders(self):
+        self.dev.cmd("key boot")
+        empty = self.screen()
+        self.assertTrue(self.api("2026-10-19", ["09:30 开会"])["success"])
+        self.assertNotEqual(self.screen(), empty)
+
+    def test_reminder_adds_an_icon_to_its_date_only_in_that_month(self):
+        month = self.screen()
+        next_month = self.dev.cmd("key down")[2]
+        self.dev.cmd("key boot")
+        self.assertTrue(self.api("2026-10-20", ["交报告"])["success"])
+        self.assertNotEqual(self.screen(), month)  # October gained a bell
+        self.assertEqual(self.dev.cmd("key down")[2], next_month)  # November did not
+        self.clear("2026-10-20")
+        self.assertEqual(self.dev.cmd("key boot")[2], month)
+
+    def test_boot_long_from_today_view_goes_home(self):
+        self.dev.cmd("key boot")
+        self.assertEqual(self.dev.keys("bootlong"), "home")
+
+    def test_api_validation_and_persistence(self):
+        self.assertEqual(self.api("2026-02-30", ["x"])["error"], "bad_date")
+        self.assertEqual(self.api("1999-01-01", ["x"])["error"], "bad_date")
+        self.assertEqual(self.api("2026-10-19", ["x" * 97])["error"], "text_too_long")
+        self.assertEqual(self.api("2026-10-19", ["a"] * 7)["error"], "too_many")
+        saved = self.api("2026-10-19", ["  买牛奶  ", "", "开会"])
+        self.assertEqual(saved["reminders"]["2026-10-19"], ["买牛奶", "开会"])  # trimmed, blanks dropped
+        self.assertEqual(json.loads(Path(REMINDERS_FILE).read_text(encoding="utf-8"))["2026-10-19"],
+                         ["买牛奶", "开会"])
+        self.assertNotIn("2026-10-19", self.api("2026-10-19", [])["reminders"])
+
+    def test_festivals_api(self):
+        j = json.load(urllib.request.urlopen(f"{self.base}/api/festivals?year=2026"))
+        self.assertEqual(j["festivals"]["2026-02-17"], ["春节"])
+        self.assertEqual(j["festivals"]["2026-10-01"], ["国庆节"])
+        self.assertNotIn("2026-07-14", j["festivals"])
+        for bad in ("2009", "2051", "abc", ""):
+            r = json.load(urllib.request.urlopen(f"{self.base}/api/festivals?year={bad}"))
+            self.assertEqual(r["error"], "bad_date")
+
+    def test_calendar_web_page_is_served(self):
+        html = urllib.request.urlopen(f"{self.base}/calendar").read().decode("utf-8")
+        self.assertIn("/api/reminders", html)
+        self.assertIn("/calendar", urllib.request.urlopen(f"{self.base}/").read().decode("utf-8"))
 
 
 if __name__ == "__main__":

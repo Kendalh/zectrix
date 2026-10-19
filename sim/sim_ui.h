@@ -21,6 +21,7 @@
 #include "ui/renderers/rawdraw/settings_renderer.h"
 #include "ui/renderers/rawdraw/voice_renderer.h"
 #include "ui/renderers/rawdraw/ai_chat_renderer.h"
+#include "ui/renderers/rawdraw/calendar_app_renderer.h"
 #include "fake/voice_backend_fake.h"
 #include "common/voice_recordings.h"
 #include "ui/renderers/rawdraw/weather_detail_renderer.h"
@@ -33,6 +34,8 @@ public:
         bool demo_weather = false;
         std::string lan_address = "127.0.0.1:8080";
         std::string voice_dir = "/tmp";  // where the fake recorder keeps rec_NNNN.wav
+        std::string reminders_file = "/tmp/sim_reminders.json";  // calendar reminders (JSON)
+        std::string today;  // "YYYY-MM-DD": fixed date for the calendar (default: system clock)
     };
 
     explicit SimUi(const Options& options);
@@ -84,5 +87,6 @@ private:
     voice::RecordingStore voice_store_;
     voice::FakeVoiceBackend voice_backend_;
     rawdraw::VoiceRenderer voice_;
+    rawdraw::CalendarAppRenderer calendar_;
     rawdraw::AiChatRenderer ai_chat_;  // state lives in ai::ChatService (started in the constructor)
 };

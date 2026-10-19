@@ -454,7 +454,7 @@ bool ApTransferServer::StartHttpServer() {
     }
 
     // Register handlers
-    // Home page (app launcher) at "/", the photo app at "/album", weather settings at "/weather", AI Q&A at "/ai".
+    // Home page (app launcher) at "/", the photo app at "/album", weather settings at "/weather", calendar reminders at "/calendar", AI Q&A at "/ai".
     const httpd_uri_t page_uris[] = {
         {"/", HTTP_GET, web::HomeHandler, this},
         {"/album", HTTP_GET, IndexHandler, this},
@@ -462,6 +462,10 @@ bool ApTransferServer::StartHttpServer() {
         {"/api/weather", HTTP_GET, web::WeatherConfigHandler, this},
         {"/api/weather", HTTP_POST, web::WeatherConfigHandler, this},
         {"/api/weather/search", HTTP_GET, web::WeatherSearchHandler, this},
+        {"/calendar", HTTP_GET, web::CalendarPageHandler, this},
+        {"/api/reminders", HTTP_GET, web::RemindersHandler, this},
+        {"/api/reminders", HTTP_POST, web::RemindersHandler, this},
+        {"/api/festivals", HTTP_GET, web::FestivalsHandler, this},
         {"/ai", HTTP_GET, web::AiPageHandler, this},
         {"/api/ai/state", HTTP_GET, web::AiStateHandler, this},
         {"/api/ai/key", HTTP_POST, web::AiKeyHandler, this},

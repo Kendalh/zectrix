@@ -24,6 +24,11 @@ esp_err_t WeatherPageHandler(httpd_req_t* req);     // GET /weather
 esp_err_t WeatherConfigHandler(httpd_req_t* req);   // GET/POST /api/weather
 esp_err_t WeatherSearchHandler(httpd_req_t* req);   // GET /api/weather/search?q=
 
+// Calendar reminders (common/reminders.h): edited in the browser, shown on the device's calendar app.
+esp_err_t CalendarPageHandler(httpd_req_t* req);    // GET /calendar
+esp_err_t RemindersHandler(httpd_req_t* req);       // GET /api/reminders; POST {date, items:[...]} replaces one date
+esp_err_t FestivalsHandler(httpd_req_t* req);       // GET /api/festivals?year=YYYY: Chinese festivals by date
+
 // AI Q&A (common/ai_chat.h): only the API key is set here; questions are spoken on the device.
 esp_err_t AiPageHandler(httpd_req_t* req);          // GET /ai: key setup
 esp_err_t AiStateHandler(httpd_req_t* req);         // GET /api/ai/state: whether the key is set

@@ -36,6 +36,7 @@ enum class RawDrawPageId {
     Home = 18,
     Voice = 19,
     AiChat = 20,
+    CalendarApp = 21,  ///< Month calendar with reminders (the older `Calendar` page is not on Home)
     Count,
 };
 

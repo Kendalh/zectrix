@@ -39,6 +39,8 @@ int main(int argc, char** argv) {
         if (!strcmp(argv[i], "--serve")) serve_only = true;
         else if (!strcmp(argv[i], "--seed-photos")) seed = true;
         else if (!strcmp(argv[i], "--demo-weather")) options.demo_weather = true;
+        else if (!strcmp(argv[i], "--reminders-file") && i + 1 < argc) options.reminders_file = argv[++i];
+        else if (!strcmp(argv[i], "--today") && i + 1 < argc) options.today = argv[++i];  // YYYY-MM-DD
         else if (!strcmp(argv[i], "--http-port") && i + 1 < argc) port = argv[++i];
         else if (!strcmp(argv[i], "--host") && i + 1 < argc) host = argv[++i];
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out_dir = argv[++i];

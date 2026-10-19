@@ -19,6 +19,8 @@ const std::vector<AppEntry>& GetApps() {
          AppAction::OpenPage, RawDrawPageId::Gallery},
         {"weather", "天气", "天气预报", kWeatherSunGlyph, &weather_icons_16,
          AppAction::OpenPage, RawDrawPageId::Weather},
+        {"calendar", "日历", "月历与提醒", FA_SETTINGS_CALENDAR, &fa_settings_16,
+         AppAction::OpenPage, RawDrawPageId::CalendarApp},
         {"voice", "语音", "录音与播放", FA_SETTINGS_VOLUME, &fa_settings_16,
          AppAction::OpenPage, RawDrawPageId::Voice},
         {"ai_chat", "AI 问答", "千问对话", FA_SETTINGS_COMMENT, &fa_settings_16,

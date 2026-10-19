@@ -60,6 +60,27 @@ question is pending (15 s refresh, no "thinking" screen). `AiChatRenderer::OnLea
 `RawDrawUiManager::StartAiChatService()` is called on Wi-Fi connect. The key is never in the source or repo. Verified against the
 real Bailian endpoint from the sim (TTS speech -> ASR -> chat); the device-side TLS/NVS/memory path was never run on hardware.
 
+Calendar app (`RawDrawPageId::CalendarApp`, Home entry "日历"; the older `Calendar` page/`CalendarRenderer` is a different,
+unreachable lunar calendar): `ui/renderers/rawdraw/calendar_app_renderer.*` (month grid, bell icon drawn from a 9x9 bitmap on dates with
+reminders, "today" list view; UP/DOWN = month, BOOT = back to current month, or today's list when already there) reads
+`common/reminders.{h,cc}` (hardware-free: date helpers, `Store` singleton `Store::Shared()` with limits, JSON file `Persistence`,
+unit-tested by `sim/tests/test_reminders.cc`). Both firmware and sim persist to a plain file via `NewFilePersistence` (firmware
+`/spiffs/reminders.json` set up in the `RawDrawUiManager` constructor, which also redraws the page on `SetOnChange`; sim
+`--reminders-file`, default `/tmp/sim_reminders.json`). `sim_device --today YYYY-MM-DD` fixes the calendar's clock (tests use it). Web page
+`/calendar` + `GET/POST /api/reminders` (`web_apps.cc`; POST replaces one date's list). `StartLanHttpServer` hands the address to the page.
+Colors in `CalendarAppRenderer` are the raw `rawdraw::Color` values on purpose (white page; black weekday band with yellow Sat/Sun letters; red
+weekend numbers; yellow festival names; yellow block with black text = today; bell red, black on today), not theme tokens; the web grid
+(`kCalendarHtml`) mirrors them. Keep both in sync when changing.
+Festival names are drawn with `font_festival_12` (12 px, 1 bpp subset of Source Han Sans SC holding only the characters of the names in
+`chinese_calendar.cc`; `sim/tools/gen_festival_font.sh FONT.otf` regenerates it, rerun it when a name gets a new character, otherwise that
+character renders blank). Zpix was rejected: its license forbids converting/splitting the font.
+Chinese festivals (2010-2050 only; nothing outside) come from `common/chinese_calendar.{h,cc}` (`FestivalsOn`/`MainFestival`, `ToLunar`) over the generated
+`common/lunar_table.inc` (`sim/tools/gen_lunar_table.py` with the pip package `lunar_python`; do not use `Calendar::ToLunarDate` in
+`rawdraw/components/calendar.cc`, it assumes alternating 30/29-day months). Verified day by day against the package (14975 days, 0 mismatches):
+`LUNAR_DAYS_CSV=file sim/build/test_chinese_calendar` with the CSV from the script's `--dump-days`; plain `make -C sim test` only runs the
+known-date checks. The web page gets them from `GET /api/festivals?year=`. No statutory holiday/make-up-workday schedule.
+Not run on hardware: SPIFFS write path, the system clock being synced, a four-color panel's red "today" highlight on the B/W Note 4.
+
 Gotchas found while building this (keep in mind for new pages):
 - Entering a page runs the renderer's `Init()`, which resets it (gallery: card mode, first photo). Anything
   that "selects then switches" is broken; switch first, then select (see `ShowPhotoById`).

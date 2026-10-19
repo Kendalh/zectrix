@@ -22,6 +22,9 @@ SimUi::SimUi(const Options& options)
     // Same wiring as Application: the AI page claims the recordings it asked for.
     ai_chat_.SetBackend(&voice_backend_, &voice_store_);
     voice_backend_.SetOnSaved([this](const std::string& path) { return ai_chat_.OnRecordingSaved(path); });
+    // Same as RawDrawUiManager: reminders persist in a file (SPIFFS on the device). The sim has no panel
+    // to refresh, the web UI polls frames, so no on-change hook.
+    reminders::Store::Shared().SetPersistence(reminders::NewFilePersistence(options.reminders_file));
     home_.SetLaunchCallback([this](const ui::AppEntry& app) { shell_.Launch(app); });
 
     ui::AppShell::Host host;
@@ -42,6 +45,17 @@ SimUi::SimUi(const Options& options)
     });
     // Same as RawDrawUiManager::StartAiChatService(); the sim has no panel refresh, so no on-change hook.
     ai_chat_.SetAddress(options_.lan_address);
+    calendar_.SetAddress(options_.lan_address);
+    int ty, tm, td;
+    if (reminders::ParseDateKey(options_.today, &ty, &tm, &td)) {
+        struct tm t = {};
+        t.tm_year = ty - 1900;
+        t.tm_mon = tm - 1;
+        t.tm_mday = td;
+        t.tm_hour = 12;
+        const time_t fixed = mktime(&t);
+        calendar_.SetClock([fixed]() { return fixed; });
+    }
     ai::ChatService::Get().Start(NewSimChatPlatform());
     // The device fetches once Wi-Fi is up; the simulator only does so when asked to preview the layout.
     if (options_.demo_weather) weather_api_fetch_now();
@@ -58,6 +72,7 @@ const char* SimUi::PageName(RawDrawPageId page) {
         case RawDrawPageId::APTransfer: return "ap_transfer";
         case RawDrawPageId::Voice: return "voice";
         case RawDrawPageId::AiChat: return "ai_chat";
+        case RawDrawPageId::CalendarApp: return "calendar";
         default: return "unknown";
     }
 }
@@ -66,7 +81,7 @@ bool SimUi::PageFromName(const std::string& name, RawDrawPageId* page) {
     for (RawDrawPageId p : {RawDrawPageId::Home, RawDrawPageId::Gallery, RawDrawPageId::PhotoDetail,
                             RawDrawPageId::Weather, RawDrawPageId::WeatherDetail,
                             RawDrawPageId::Settings, RawDrawPageId::APTransfer, RawDrawPageId::Voice,
-                            RawDrawPageId::AiChat}) {
+                            RawDrawPageId::AiChat, RawDrawPageId::CalendarApp}) {
         if (name == PageName(p)) {
             *page = p;
             return true;
@@ -86,6 +101,7 @@ rawdraw::PageRenderer* SimUi::RendererFor(RawDrawPageId page) {
         case RawDrawPageId::APTransfer: return &ap_;
         case RawDrawPageId::Voice: return &voice_;
         case RawDrawPageId::AiChat: return &ai_chat_;
+        case RawDrawPageId::CalendarApp: return &calendar_;
         default: return nullptr;
     }
 }
