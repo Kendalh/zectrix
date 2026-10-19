@@ -152,6 +152,11 @@ void WifiConfigurationAp::StartAccessPoint()
     
     // Create the default WiFi AP interface
     ap_netif_ = esp_netif_create_default_wifi_ap();
+    // APSTA needs a STA netif too: WifiStation destroys its own on Stop(), and without one the
+    // connection test associates but never gets an IP (DHCP client missing), so every join fails.
+    if (!sta_netif_) {
+        sta_netif_ = esp_netif_create_default_wifi_sta();
+    }
 
     // Set the router IP address to 192.168.4.1
     esp_netif_ip_info_t ip_info;
@@ -912,6 +917,10 @@ void WifiConfigurationAp::Stop() {
     esp_wifi_stop();
     
     // 销毁网络接口
+    if (sta_netif_) {
+        esp_netif_destroy_default_wifi(sta_netif_);
+        sta_netif_ = nullptr;
+    }
     if (ap_netif_) {
         esp_netif_destroy_default_wifi(ap_netif_);
         ap_netif_ = nullptr;

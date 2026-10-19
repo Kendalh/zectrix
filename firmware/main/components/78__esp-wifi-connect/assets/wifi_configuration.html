@@ -1223,6 +1223,8 @@
          */
         function loadAPList() {
             if (button.disabled) {
+                // Connecting: skip this round but keep polling afterwards
+                setTimeout(loadAPList, 5000);
                 return;
             }
 
@@ -1245,7 +1247,13 @@
                     
                     // Use select_wifi_5g if 5G is supported, otherwise use select_wifi
                     const selectText = support5G ? translations[lang].select_wifi_5g : translations[lang].select_wifi;
-                    apList.innerHTML = '<p>' + selectText + '</p>';
+                    // Build off-DOM and swap in one step: clearing innerHTML first collapses the
+                    // page height, which clamps the scroll position and moves the Connect button
+                    // out from under the finger mid-tap.
+                    const fragment = document.createDocumentFragment();
+                    const header = document.createElement('p');
+                    header.textContent = selectText;
+                    fragment.appendChild(header);
                     
                     // Iterate through available APs
                     data.aps.forEach(ap => {
@@ -1264,8 +1272,9 @@
                             ssid.value = ap.ssid;
                         });
                         
-                        apList.appendChild(link);
+                        fragment.appendChild(link);
                     });
+                    apList.replaceChildren(fragment);
                     
                     // Refresh AP list every 5 seconds
                     setTimeout(loadAPList, 5000);
@@ -1279,13 +1288,29 @@
 
         // ========== Form Submission ==========
         
+        function showFormError(message) {
+            error.textContent = message;
+            error.scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+
         /**
          * Submit Wi-Fi connection form
          */
         async function submitForm(event) {
             event.preventDefault();
-            button.disabled = true;
             error.textContent = '';
+            // Validate here: server errors are shown at the top of the form, which is off-screen
+            // when the user has scrolled down to pick a network, so a rejected tap looked like a dead button.
+            const pwd = document.getElementById('password').value;
+            if (!ssid.value) {
+                showFormError('Please select a Wi-Fi network');
+                return;
+            }
+            if (pwd.length > 0 && pwd.length < 8) {
+                showFormError('Password must be at least 8 characters');
+                return;
+            }
+            button.disabled = true;
 
             // Show loading animation
             const loadingOverlay = document.getElementById('loadingOverlay');
@@ -1316,7 +1341,7 @@
             } catch (err) {
                 // Hide loading animation on error
                 loadingOverlay.classList.remove('show');
-                error.textContent = err.message;
+                showFormError(err.message);
                 button.disabled = false;
             }
         }

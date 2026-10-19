@@ -220,7 +220,7 @@ const char* RawDrawUiManager::GetPageTitle(RawDrawPageId page) {
         case RawDrawPageId::Calendar:   return "日历";
         case RawDrawPageId::FontDebug:  return "对齐测试";
         case RawDrawPageId::FontMetrics: return "字体指标";
-        case RawDrawPageId::APTransfer: return "传图模式";
+        case RawDrawPageId::APTransfer: return "WiFi 配网";
         case RawDrawPageId::Home:     return "首页";
         case RawDrawPageId::Voice:    return "语音";
         case RawDrawPageId::AiChat:   return "AI 问答";
