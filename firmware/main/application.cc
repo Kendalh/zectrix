@@ -155,9 +155,15 @@ void Application::Initialize() {
         vr->SetBackend(voice_backend_.get(), &voice_store_);
     }
     // AI app: a question can be recorded with the same microphone backend; its file is claimed by the AI page.
-    if (auto* ar = rawdraw_ui_manager_->GetAiChatRenderer()) {
-        ar->SetBackend(voice_backend_.get(), &voice_store_);
-        voice_backend_->SetOnSaved([ar](const std::string& path) { return ar->OnRecordingSaved(path); });
+    // The AI painter does the same; each page only claims a recording it asked for, so chaining the two is safe.
+    {
+        auto* ar = rawdraw_ui_manager_->GetAiChatRenderer();
+        auto* pr = rawdraw_ui_manager_->GetAiPaintRenderer();
+        if (ar) ar->SetBackend(voice_backend_.get(), &voice_store_);
+        if (pr) pr->SetBackend(voice_backend_.get(), &voice_store_);
+        voice_backend_->SetOnSaved([ar, pr](const std::string& path) {
+            return (ar && ar->OnRecordingSaved(path)) || (pr && pr->OnRecordingSaved(path));
+        });
     }
 
     if (auto* sr = rawdraw_ui_manager_->GetSettingsRenderer()) {
@@ -276,7 +282,9 @@ void Application::Initialize() {
                 StartSntpClockSyncOnce();
                 if (rawdraw_ui_manager_) {
                     rawdraw_ui_manager_->StartWeatherService();
+                    rawdraw_ui_manager_->StartNoticeService();
                     rawdraw_ui_manager_->StartAiChatService();
+                    rawdraw_ui_manager_->StartTokenBoardService();
                 }
                 if (rawdraw_ui_manager_ && !rawdraw_ui_manager_->IsLanHttpServerRunning()) {
                     const std::string ip = data.empty() ? WifiManager::GetInstance().GetIpAddress() : data;

@@ -36,6 +36,9 @@ enum class RawDrawPageId {
     Home = 18,
     Voice = 19,
     AiChat = 20,
+    AiPaint = 22,      ///< AI painter: speak a subject, get a four-colour picture
+    TokenBoard = 23,   ///< Bailian balance and cost board
+    Recipes = 24,      ///< Built-in recipes: list + two-page view
     CalendarApp = 21,  ///< Month calendar with reminders (the older `Calendar` page is not on Home)
     Count,
 };

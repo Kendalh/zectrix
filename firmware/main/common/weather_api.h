@@ -105,14 +105,22 @@ WeatherIcon ParseWeatherIcon(const char* weather_text);
 using WeatherCallback = std::function<void(const WeatherData&)>;
 
 /**
- * @brief Start the background weather task (idempotent).
+ * @brief Start the weather task (idempotent).
  *
- * Loads the saved WeatherConfig, fetches the selected city once and then every interval_min minutes.
- * Call after Wi-Fi is connected; fetches that fail (no network) are retried at the next interval.
+ * Loads the saved WeatherConfig and creates the task, which then stays idle: **nothing is fetched at boot or when
+ * Wi-Fi connects, and there is no timer**. Weather is fetched only on request: weather_api_refresh_if_stale() (the
+ * Weather page was entered), weather_api_fetch_now() (refresh key), weather_api_select_city(), weather_api_set_config().
+ * A failed fetch (no network) is not retried by itself; the next request tries again.
  */
 void weather_api_start(WeatherCallback callback);
 
-/** Request an immediate refresh. @return false if the task is not running. */
+/**
+ * The Weather page was entered: fetch the selected city only if the cached data is older than interval_min (the data's
+ * validity); a fresh cache means the page already shows it and no request is made. @return false if the task is not running.
+ */
+bool weather_api_refresh_if_stale();
+
+/** Request an immediate refresh, ignoring the cache. @return false if the task is not running. */
 bool weather_api_fetch_now();
 
 /** Current configuration (persisted). */

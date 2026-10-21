@@ -16,6 +16,7 @@
 
 #include <ctime>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,14 @@ public:
 
     /** Address of the device web page shown in the hints, e.g. "192.168.1.20:8080" (no scheme, no path). */
     void SetAddress(const std::string& host) { host_ = host; }
+
+    /** Latest notice from the server, shown on one line under the month grid; empty hides the line. */
+    void SetNotice(const std::string& text) {
+        std::lock_guard<std::mutex> lock(notice_mutex_);  // called from the notice task
+        if (text == notice_) return;
+        notice_ = text;
+        needs_full_refresh_ = true;
+    }
 
     // Test hooks: defaults are the shared store and the system clock.
     void SetStore(reminders::Store* store) { store_ = store; }
@@ -61,6 +70,8 @@ private:
     reminders::Store* store_;
     Clock clock_;
     std::string host_;
+    mutable std::mutex notice_mutex_;
+    std::string notice_;  // guarded by notice_mutex_
     Mode mode_ = Mode::Month;
     int view_year_ = 2026;
     int view_month_ = 1;

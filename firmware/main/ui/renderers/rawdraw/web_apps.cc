@@ -6,7 +6,9 @@
 #include "web_apps.h"
 
 #include "common/ai_chat.h"
+#include "common/token_board.h"
 #include "common/chinese_calendar.h"
+#include "common/notice_api.h"
 #include "common/reminders.h"
 #include "common/weather_api.h"
 
@@ -42,13 +44,14 @@ const char kHomeHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>%STYLE%</style></head><body><main class="app">
 <div class="top"><div><div class="brand">墨水屏设置</div><div class="muted" id="ep"></div></div></div>
 <a class="panel card" href="/album"><div class="t">相册 · 传图</div><div class="muted">上传照片、填写名字、管理设备相册和轮播周期</div></a>
-<a class="panel card" href="/weather"><div class="t">天气</div><div class="muted" id="wsum">管理最多 5 个城市和刷新频率</div></a>
+<a class="panel card" href="/weather"><div class="t">天气</div><div class="muted" id="wsum">管理最多 5 个城市和数据有效期</div></a>
 <a class="panel card" href="/calendar"><div class="t">日历 · 提醒事项</div><div class="muted" id="csum">为日期添加提醒，设备日历上会显示铃铛图标</div></a>
-<a class="panel card" href="/ai"><div class="t">AI 问答 · Key 设置</div><div class="muted">填写阿里云百炼的 API Key（提问在设备上用语音完成）</div></a>
+<a class="panel card" href="/ai"><div class="t">AI Key设置</div><div class="muted">填写阿里云百炼的 API Key，AI 问答和 AI 画图共用（使用都在设备上用语音完成）</div></a>
+<a class="panel card" href="/tokenboard"><div class="t">Token 看板</div><div class="muted">AI 余额和费用：阿里百炼、DeepSeek 的密钥和刷新频率</div></a>
 </main><script>
 fetch('/status').then(r=>r.json()).then(j=>{document.getElementById('ep').textContent=j.ip}).catch(()=>{});
 fetch('/api/reminders').then(r=>r.json()).then(j=>{const n=Object.keys(j.reminders).length;if(n)document.getElementById('csum').textContent='共 '+n+' 天有提醒'}).catch(()=>{});
-fetch('/api/weather').then(r=>r.json()).then(j=>{document.getElementById('wsum').textContent=j.cities[j.selected].name+' · 共 '+j.cities.length+' 个城市 · '+j.interval+' 分钟刷新'}).catch(()=>{});
+fetch('/api/weather').then(r=>r.json()).then(j=>{document.getElementById('wsum').textContent=j.cities[j.selected].name+' · 共 '+j.cities.length+' 个城市 · '+j.interval+' 分钟有效'}).catch(()=>{});
 </script></body></html>)HTML";
 
 const char kWeatherHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>天气设置</title>
@@ -61,7 +64,7 @@ const char kWeatherHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UTF
 <section class="panel"><b>添加城市</b>
 <div class="row" style="margin-top:8px"><input type="text" id="q" placeholder="输入城市名，如 杭州 / Shanghai"><button class="btn yellow" id="search">搜索</button></div>
 <div id="results"></div></section>
-<section class="panel"><b>刷新频率</b>
+<section class="panel"><b>数据有效期</b> <span class="muted">进入天气页时，数据超过这个时间才重新获取；设备不会在后台定时刷新</span>
 <div class="row" style="margin-top:8px"><label><input name="iv" type="radio" value="5">5 分钟</label><label><input name="iv" type="radio" value="10">10 分钟</label><label><input name="iv" type="radio" value="30" checked>30 分钟</label></div></section>
 <div class="row"><button class="btn" id="save">保存并刷新</button><span id="msg" class="muted"></span></div>
 </main><script>
@@ -112,6 +115,9 @@ const char kCalendarHtml[] = R"HTML(<!DOCTYPE html><html><head><meta charset="UT
 <section class="panel"><b id="dt"></b><div id="items"></div>
 <div class="row" style="margin-top:10px"><button class="btn secondary" id="add">添加一条</button><button class="btn" id="save">保存</button><span id="msg" class="muted"></span></div></section>
 <section class="panel"><b>即将到来的提醒</b><div id="upcoming"></div></section>
+<section class="panel"><b>最新提醒（日历底部一行）</b><div class="muted">进入日历应用时才从服务器拉取；这里是数据有效期，没过期时再次进入不重复拉取</div>
+<div class="row" style="margin-top:8px"><label><input type="radio" name="niv" value="10"> 10 分钟</label> <label><input type="radio" name="niv" value="30"> 30 分钟</label> <label><input type="radio" name="niv" value="60"> 1 小时</label> <label><input type="radio" name="niv" value="0"> 不拉取</label>
+<button class="btn" id="nsave">保存</button><span id="nmsg" class="muted"></span></div></section>
 </main><script>
 const $=id=>document.getElementById(id),WD=['日','一','二','三','四','五','六'];
 const pad=n=>String(n).padStart(2,'0'),key=(y,m,d)=>y+'-'+pad(m)+'-'+pad(d);
@@ -156,13 +162,15 @@ $('save').onclick=async()=>{const items=draft.map(s=>s.trim()).filter(Boolean),e
  try{const r=await fetch('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:sel,items})});const j=await r.json();
   if(j.success){apply(j);draft=(data[sel]||[]).slice();msg('已保存'+(items.length?'':'（该日提醒已清空）'));renderAll()}else msg('保存失败：'+(ERR[j.error]||j.error||'未知错误'))}
  catch(e){msg('网络错误')}$('save').disabled=false};
+fetch('/api/notice').then(r=>r.json()).then(j=>{document.querySelectorAll('input[name=niv]').forEach(r=>r.checked=(+r.value===j.interval))}).catch(()=>{$('nmsg').textContent='读取失败'});
+$('nsave').onclick=async()=>{const v=+(document.querySelector('input[name=niv]:checked')||{}).value;try{const r=await fetch('/api/notice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:v})});const j=await r.json();$('nmsg').textContent=j.success?'已保存':'保存失败'}catch(e){$('nmsg').textContent='保存失败'}};
 fetch('/api/reminders').then(r=>r.json()).then(j=>{apply(j);draft=(data[sel]||[]).slice();renderAll()}).catch(()=>{renderAll();msg('读取失败（设备离线？）')});
 </script></body></html>)HTML";
 
-const char kAiHtml[] =R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>AI 问答设置</title>
+const char kAiHtml[] =R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>AI Key设置</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>%STYLE%</style></head><body><main class="app">
-<div class="top"><div><div class="brand">AI 问答设置</div><div class="muted">提问和管理会话都在设备上：进入"AI 问答"，长按 UP 说话</div></div><a class="btn secondary" href="/" style="text-decoration:none">首页</a></div>
-<section class="panel"><b>阿里云百炼 API Key</b> <span class="muted" id="keyst"></span><div class="muted" style="margin:4px 0 8px">同一个 Key 同时用于语音识别（Qwen3-ASR）和回答（Qwen-Flash）。保存在设备上，不会再显示出来。</div>
+<div class="top"><div><div class="brand">AI Key设置</div><div class="muted">AI 问答和 AI 画图共用这个 Key；使用都在设备上：进入对应应用，长按 UP 说话</div></div><a class="btn secondary" href="/" style="text-decoration:none">首页</a></div>
+<section class="panel"><b>阿里云百炼 API Key</b> <span class="muted" id="keyst"></span><div class="muted" style="margin:4px 0 8px">同一个 Key 同时用于语音识别（Qwen3-ASR）、AI 问答（Qwen-Flash）和 AI 画图（Qwen-Image）。保存在设备上，不会再显示出来。</div>
 <div class="row"><input type="text" id="key" placeholder="sk-..." autocomplete="off"><button class="btn yellow" id="savekey">保存</button></div></section>
 <div id="msg" class="muted"></div>
 </main><script>
@@ -170,6 +178,28 @@ const $=id=>document.getElementById(id);
 async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);return r.json()}
 async function load(){try{const j=await api('/api/ai/state');$('keyst').textContent=j.hasKey?'（已设置）':'（未设置）'}catch(e){$('msg').textContent='读取失败（设备离线？）'}}
 $('savekey').onclick=async()=>{const j=await api('/api/ai/key',{key:$('key').value});if(j.success){$('key').value='';$('msg').textContent='Key 已保存'}else $('msg').textContent=j.error||'Key 无效';load()};
+load();
+</script></body></html>)HTML";
+
+const char kTokenBoardHtml[] =R"HTML(<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Token 看板设置</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>%STYLE%</style></head><body><main class="app">
+<div class="top"><div><div class="brand">Token 看板设置</div><div class="muted">设备上的“Token 看板”显示余额和费用（百炼有按模型明细，DeepSeek 只有余额）；在设备上按 BOOT 刷新，UP/DOWN 切换提供商</div></div><a class="btn secondary" href="/" style="text-decoration:none">首页</a></div>
+<section class="panel"><b>阿里云 AccessKey</b> <span class="muted" id="keyst"></span><div class="muted" style="margin:4px 0 8px">用 RAM 子账号的 AccessKey，只授权 AliyunBSSReadOnlyAccess（费用中心只读），不要用主账号。保存在设备上，不会再显示出来。目前只支持中国站（aliyun.com）。</div>
+<div class="row" style="margin-bottom:6px"><input type="text" id="kid" placeholder="AccessKey ID（LTAI...）" autocomplete="off"></div>
+<div class="row"><input type="text" id="ksec" placeholder="AccessKey Secret" autocomplete="off"><button class="btn yellow" id="save">保存</button></div></section>
+<section class="panel"><b>DeepSeek API Key</b> <span class="muted" id="dskeyst"></span><div class="muted" style="margin:4px 0 8px">在 DeepSeek 开放平台（platform.deepseek.com）的 API keys 页面创建，用来查余额；Key 以 sk- 开头。保存在设备上，不会再显示出来。DeepSeek 没有开放用量接口，所以只显示余额。</div>
+<div class="row"><input type="text" id="dskey" placeholder="sk-..." autocomplete="off"><button class="btn yellow" id="savedskey">保存</button></div></section>
+<section class="panel"><b>刷新频率</b><div class="muted" style="margin:4px 0 8px">进入看板时，数据比这更旧才会重新获取；按 BOOT 随时立即刷新。设备不会在后台定时拉取。</div>
+<label><input type="radio" name="iv" value="10"> 10 分钟</label> &nbsp; <label><input type="radio" name="iv" value="30"> 30 分钟</label> &nbsp; <label><input type="radio" name="iv" value="60"> 1 小时</label>
+<div style="margin-top:8px"><button class="btn yellow" id="saveiv">保存</button></div></section>
+<div id="msg" class="muted"></div>
+</main><script>
+const $=id=>document.getElementById(id);
+async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);return r.json()}
+async function load(){try{const j=await api('/api/tokenboard/state');$('keyst').textContent=j.hasKey?'（已设置）':'（未设置）';$('dskeyst').textContent=j.hasDeepseekKey?'（已设置）':'（未设置）';document.querySelectorAll('input[name=iv]').forEach(r=>r.checked=(+r.value===j.interval))}catch(e){$('msg').textContent='读取失败（设备离线？）'}}
+$('savedskey').onclick=async()=>{const j=await api('/api/tokenboard/deepseek',{key:$('dskey').value});if(j.success){$('dskey').value='';$('msg').textContent='DeepSeek Key 已保存'}else $('msg').textContent=j.error||'Key 无效';load()};
+$('saveiv').onclick=async()=>{const v=+(document.querySelector('input[name=iv]:checked')||{}).value;const j=await api('/api/tokenboard/interval',{interval:v});$('msg').textContent=j.success?'刷新频率已保存':(j.error||'保存失败')};
+$('save').onclick=async()=>{const j=await api('/api/tokenboard/key',{id:$('kid').value,secret:$('ksec').value});if(j.success){$('kid').value='';$('ksec').value='';$('msg').textContent='已保存，到设备上打开 Token 看板'}else $('msg').textContent=j.error||'保存失败';load()};
 load();
 </script></body></html>)HTML";
 
@@ -303,6 +333,21 @@ esp_err_t WeatherConfigHandler(httpd_req_t* req) {
     return SendJsonTree(req, root);
 }
 
+esp_err_t NoticeConfigHandler(httpd_req_t* req) {
+    if (req->method == HTTP_POST) {
+        cJSON* body = ReadBody(req);
+        if (!body) return SendError(req, "bad_json");
+        cJSON* interval = cJSON_GetObjectItemCaseSensitive(body, "interval");
+        const bool ok = cJSON_IsNumber(interval) && notice_api_set_interval(interval->valueint);
+        cJSON_Delete(body);
+        if (!ok) return SendError(req, "invalid_interval");
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddNumberToObject(root, "interval", notice_api_get_interval());
+    return SendJsonTree(req, root);
+}
+
 esp_err_t WeatherSearchHandler(httpd_req_t* req) {
     char query[160] = {};
     char encoded[128] = {};
@@ -428,6 +473,61 @@ esp_err_t AiKeyHandler(httpd_req_t* req) {
     auto& service = ai::ChatService::Get();
     if (!service.SetApiKey(value)) {
         return SendError(req, "Key 无效，或设备尚未联网");
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    return SendJsonTree(req, root);
+}
+
+// ---- Token board --------------------------------------------------------------------------------
+
+esp_err_t TokenBoardPageHandler(httpd_req_t* req) { return SendPage(req, kTokenBoardHtml); }
+
+esp_err_t TokenBoardStateHandler(httpd_req_t* req) {
+    auto& service = board::BoardService::Get();
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddBoolToObject(root, "started", service.Started());
+    cJSON_AddBoolToObject(root, "hasKey", service.HasCredentials());  // the key itself is never sent back
+    cJSON_AddBoolToObject(root, "hasDeepseekKey", board::DeepSeekService::Get().HasApiKey());
+    cJSON_AddNumberToObject(root, "interval", service.IntervalMinutes());
+    return SendJsonTree(req, root);
+}
+
+esp_err_t TokenBoardDeepSeekHandler(httpd_req_t* req) {
+    cJSON* body = ReadBody(req);
+    if (!body) return SendError(req, "bad_json");
+    cJSON* key = cJSON_GetObjectItemCaseSensitive(body, "key");
+    const std::string value = cJSON_IsString(key) ? key->valuestring : "";
+    cJSON_Delete(body);
+    if (!board::DeepSeekService::Get().SetApiKey(value)) return SendError(req, "API Key 无效，或设备尚未联网");
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    return SendJsonTree(req, root);
+}
+
+esp_err_t TokenBoardIntervalHandler(httpd_req_t* req) {
+    cJSON* body = ReadBody(req);
+    if (!body) return SendError(req, "bad_json");
+    cJSON* interval = cJSON_GetObjectItemCaseSensitive(body, "interval");
+    const int minutes = cJSON_IsNumber(interval) ? interval->valueint : 0;
+    cJSON_Delete(body);
+    if (!board::BoardService::Get().SetIntervalMinutes(minutes)) return SendError(req, "刷新频率无效，或设备尚未联网");
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    return SendJsonTree(req, root);
+}
+
+esp_err_t TokenBoardKeyHandler(httpd_req_t* req) {
+    cJSON* body = ReadBody(req);
+    if (!body) return SendError(req, "bad_json");
+    cJSON* id = cJSON_GetObjectItemCaseSensitive(body, "id");
+    cJSON* secret = cJSON_GetObjectItemCaseSensitive(body, "secret");
+    const std::string id_value = cJSON_IsString(id) ? id->valuestring : "";
+    const std::string secret_value = cJSON_IsString(secret) ? secret->valuestring : "";
+    cJSON_Delete(body);
+    if (!board::BoardService::Get().SetCredentials(id_value, secret_value)) {
+        return SendError(req, "ID 或 Secret 无效，或设备尚未联网");
     }
     cJSON* root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "success", true);

@@ -22,6 +22,8 @@ constexpr int kWeekH = 18;
 constexpr int kRowH = 34;
 constexpr int kMarginX = 14;
 constexpr int kBellW = 9;
+constexpr int kNoticeH = 20;       // "最新提醒" line above the footer
+constexpr int kRowHWithNotice = 31;  // 6-row months shrink to this to make room for it
 
 const char* const kWeekNames[] = {"日", "一", "二", "三", "四", "五", "六"};
 const char* const kWeekNamesLong[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
@@ -75,6 +77,24 @@ std::vector<std::string> WrapText(const std::string& text, const lv_font_t* font
     }
     if (!line.empty()) lines.push_back(line);
     return lines;
+}
+
+// Cut `text` to the first line and to at most max_w, ending in "…" when shortened.
+std::string FitOneLine(const std::string& text, const lv_font_t* font, int max_w) {
+    std::string line = text.substr(0, text.find_first_of("\r\n"));
+    if (MeasureTextWidth(line.c_str(), font) <= max_w) return line;
+    const int ellipsis_w = MeasureTextWidth("…", font);
+    std::string out;
+    int w = 0;
+    for (size_t i = 0; i < line.size();) {
+        const size_t len = std::min(Utf8Len(static_cast<unsigned char>(line[i])), line.size() - i);
+        const std::string ch = line.substr(i, len);
+        w += MeasureTextWidth(ch.c_str(), font);
+        if (w + ellipsis_w > max_w) break;
+        out += ch;
+        i += len;
+    }
+    return out + "…";
 }
 
 }  // namespace
@@ -176,6 +196,11 @@ void CalendarAppRenderer::Render(uint8_t* fb, int width, int height) {
 
 void CalendarAppRenderer::RenderMonth(uint8_t* fb, int width, int height) {
     const Today today = Now();
+    std::string notice;
+    {
+        std::lock_guard<std::mutex> lock(notice_mutex_);
+        notice = notice_;
+    }
 
     char title[32];
     snprintf(title, sizeof(title), "%d年%d月", view_year_, view_month_);
@@ -200,6 +225,8 @@ void CalendarAppRenderer::RenderMonth(uint8_t* fb, int width, int height) {
     const int days = reminders::DaysInMonth(view_year_, view_month_);
     const unsigned marked = store_->DaysWithReminders(view_year_, view_month_);
     const bool current_month = view_year_ == today.year && view_month_ == today.month;
+    const int rows = (first_weekday + days + 6) / 7;
+    const int row_h = (rows >= 6 && !notice.empty()) ? kRowHWithNotice : kRowH;
 
     for (int day = 1; day <= days; ++day) {
         const int slot = first_weekday + day - 1;
@@ -207,7 +234,7 @@ void CalendarAppRenderer::RenderMonth(uint8_t* fb, int width, int height) {
         const int row = slot / 7;
         const int x0 = col * width / 7;
         const int cell_w = (col + 1) * width / 7 - x0;
-        const int y0 = grid_top + 1 + row * kRowH;
+        const int y0 = grid_top + 1 + row * row_h;
         const bool is_today = current_month && day == today.day;
         const bool weekend = col == 0 || col == 6;
         // A festival name goes under the number, so the number moves up on those days.
@@ -219,7 +246,7 @@ void CalendarAppRenderer::RenderMonth(uint8_t* fb, int width, int height) {
         Color bell_color = RED;
         if (is_today) {
             const int pad = festival ? 0 : 2;
-            DrawRoundRect(fb, width, height, {x0 + 3, y0 + pad, cell_w - 6, kRowH - 2 * pad}, Style::kBorderRadiusMD,
+            DrawRoundRect(fb, width, height, {x0 + 3, y0 + pad, cell_w - 6, row_h - 2 * pad}, Style::kBorderRadiusMD,
                           YELLOW, YELLOW, 1);
             number_color = BLACK;  // red/yellow on yellow would not read
             label_color = BLACK;
@@ -229,12 +256,22 @@ void CalendarAppRenderer::RenderMonth(uint8_t* fb, int width, int height) {
         char num[16];
         snprintf(num, sizeof(num), "%d", day);
         DrawText(fb, width, x0 + (cell_w - MeasureTextWidth(num, font_)) / 2,
-                 InkCenteredTextTopY(font_, num, y0 + (festival ? 9 : kRowH / 2), 0), num, font_, number_color);
+                 InkCenteredTextTopY(font_, num, y0 + (festival ? 9 : row_h / 2), 0), num, font_, number_color);
         if (festival) {
             DrawText(fb, width, x0 + (cell_w - MeasureTextWidth(festival, festival_font_)) / 2,
                      InkCenteredTextTopY(festival_font_, festival, y0 + 25, 0), festival, festival_font_, label_color);
         }
         if (marked & (1u << day)) DrawBell(fb, width, x0 + cell_w - kBellW - 7, y0 + 6, bell_color);
+    }
+
+    if (!notice.empty()) {
+        const char* label = "最新提醒：";
+        const int label_w = MeasureTextWidth(label, font_);
+        const std::string text = FitOneLine(notice, font_, width - 2 * kMarginX - label_w);
+        const int cy = height - Style::kFooterBarHeight - kNoticeH / 2;
+        DrawText(fb, width, kMarginX, InkCenteredTextTopY(font_, label, cy, 0), label, font_, RED);
+        DrawText(fb, width, kMarginX + label_w, InkCenteredTextTopY(font_, text.c_str(), cy, 0), text.c_str(), font_,
+                 BLACK);
     }
 
     FooterBar footer;

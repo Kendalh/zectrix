@@ -1,5 +1,5 @@
 // Host simulator: renders a rawdraw page into a 2bpp framebuffer and replays button events.
-//   sim_main --page gallery|photo_detail|weather|weather_detail --out DIR [--keys up,down,boot,...]
+//   sim_main --page gallery|photo_detail|weather|weather_detail|recipes --out DIR [--keys up,down,boot,...]
 // Writes DIR/<page>_<step>.fb after the initial render and after every key.
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +13,7 @@
 #include "sim_fixtures.h"
 #include "ui/renderers/rawdraw/photo_detail_renderer.h"
 #include "ui/renderers/rawdraw/photo_gallery.h"
+#include "ui/renderers/rawdraw/recipe_renderer.h"
 #include "ui/renderers/rawdraw/weather_detail_renderer.h"
 #include "ui/renderers/rawdraw/weather_renderer.h"
 
@@ -60,6 +61,8 @@ int main(int argc, char** argv) {
         auto w = std::make_unique<rawdraw::WeatherDetailRenderer>();
         feed = [p = w.get()] { p->Update(MakeWeather()); };
         r = std::move(w);
+    } else if (page == "recipes") {
+        r = std::make_unique<rawdraw::RecipeRenderer>();
     } else {
         fprintf(stderr, "unknown page %s\n", page.c_str());
         return 2;

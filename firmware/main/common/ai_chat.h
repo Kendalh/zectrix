@@ -116,6 +116,13 @@ public:
          * deleted when the request is finished.
          */
         std::string body_file, body_prefix, body_suffix;
+        /** Response bytes kept; the rest is cut. 16 KB fits any chat answer, the image download raises it. */
+        size_t max_response = 16 * 1024;
+        /**
+         * Optional PEM (NUL-terminated, static lifetime). If the normal handshake fails (ESP_ERR_HTTP_CONNECT),
+         * the platform retries once with only this certificate as trust anchor. Null = no retry.
+         */
+        const char* fallback_ca_pem = nullptr;
     };
 
     /** Start an HTTPS request and return immediately; `done` is called exactly once, off the caller's thread. */

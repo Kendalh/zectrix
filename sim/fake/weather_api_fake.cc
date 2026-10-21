@@ -47,6 +47,15 @@ void weather_api_start(WeatherCallback callback) {
     g_started = true;
 }
 
+bool weather_api_refresh_if_stale() {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (!g_started) return false;
+        if (g_has_last) return true;  // the canned data never goes stale
+    }
+    return weather_api_fetch_now();
+}
+
 bool weather_api_fetch_now() {
     WeatherCallback cb;
     WeatherData data;

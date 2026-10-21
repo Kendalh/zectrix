@@ -439,7 +439,7 @@ bool ApTransferServer::StartAccessPoint() {
 
 bool ApTransferServer::StartHttpServer() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 32;
+    config.max_uri_handlers = 40;
     config.stack_size = 10240;  // weather search/refresh does a TLS request from a handler
     config.max_open_sockets = 4;
     config.recv_wait_timeout = 30;  // Large images take time
@@ -465,10 +465,17 @@ bool ApTransferServer::StartHttpServer() {
         {"/calendar", HTTP_GET, web::CalendarPageHandler, this},
         {"/api/reminders", HTTP_GET, web::RemindersHandler, this},
         {"/api/reminders", HTTP_POST, web::RemindersHandler, this},
+        {"/api/notice", HTTP_GET, web::NoticeConfigHandler, this},
+        {"/api/notice", HTTP_POST, web::NoticeConfigHandler, this},
         {"/api/festivals", HTTP_GET, web::FestivalsHandler, this},
         {"/ai", HTTP_GET, web::AiPageHandler, this},
         {"/api/ai/state", HTTP_GET, web::AiStateHandler, this},
         {"/api/ai/key", HTTP_POST, web::AiKeyHandler, this},
+        {"/tokenboard", HTTP_GET, web::TokenBoardPageHandler, this},
+        {"/api/tokenboard/state", HTTP_GET, web::TokenBoardStateHandler, this},
+        {"/api/tokenboard/key", HTTP_POST, web::TokenBoardKeyHandler, this},
+        {"/api/tokenboard/interval", HTTP_POST, web::TokenBoardIntervalHandler, this},
+        {"/api/tokenboard/deepseek", HTTP_POST, web::TokenBoardDeepSeekHandler, this},
     };
     for (const auto& uri : page_uris) {
         if (httpd_register_uri_handler(server_, &uri) != ESP_OK) return false;

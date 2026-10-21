@@ -60,6 +60,55 @@ question is pending (15 s refresh, no "thinking" screen). `AiChatRenderer::OnLea
 `RawDrawUiManager::StartAiChatService()` is called on Wi-Fi connect. The key is never in the source or repo. Verified against the
 real Bailian endpoint from the sim (TTS speech -> ASR -> chat); the device-side TLS/NVS/memory path was never run on hardware.
 
+AI painter app (`RawDrawPageId::AiPaint`, Home entry "AI 画图"; same Bailian key and `ai::ChatPlatform` as AI Q&A, no web page): logic in
+`common/ai_paint.{h,cc}` (`ai::paint::PaintService` singleton: one job at a time, phases Transcribing -> Planning -> Generating -> Downloading ->
+Converting -> Ready/Error; pure helpers `NormalizeSubject`/`StylePrompt`/`BuildImageRequestJson`/`ParseImageResponse`/`PngToBwry`) and
+`common/png_decode.{h,cc}` (own inflate + 8-bit PNG decoder: ESP-IDF has no zlib and LVGL's lodepng allocates via `lv_malloc`), both
+unit-tested by `sim/tests/test_ai_paint.cc` (fixtures in `sim/tests/data/`, made with PIL). Flow: hold UP records through the Voice
+backend, `AiPaintRenderer::OnRecordingSaved` claims the WAV (the two AI pages' claims are chained in `Application` and `SimUi`),
+`qwen3-asr-flash` transcribes, then a planning call to `qwen-flash` with the system prompt `kPlannerSystem` turns the subject into one English scene
+description (it picks the sky and the celestial disc from the time of day/weather in the words: sunset = red sun (default), day = yellow sun, night =
+moon, rain/snow/fog = none; do NOT hard-code a sun in the shared style), which goes into `kPosterPrefix`/`kPosterSuffix` (the Pudong/Fuji poster look,
+`kNegativePrompt`); if planning fails `FallbackPrompt` (subject in a neutral template) is used. `qwen-image-2.0-pro` (sync `multimodal-generation` endpoint; `qwen-image-3.0-pro` and `qwen-image-plus` do not work on
+`dashscope.aliyuncs.com`) returns a pre-signed PNG URL (640x480: the API rejects images under 512x512 pixels, so the panel's 400x300 is not allowed), the PNG is downloaded with a GET (no Authorization header; `HttpRequest::max_response`
+raised to 4 MB, `buffer_size_tx` 2048 for the long URL) and `PngToBwry` crops 3%, area-averages to 400x300 and Floyd-Steinberg dithers onto
+black/white/yellow/red (2 bpp codes 00/01/10/11, the `rawdraw::Color` order). Network-level failures (no HTTP answer) of the image request and the download are retried once (`SendWithRetry`, 1.5 s apart, on the request task); a download over
+TLS that fails once goes straight to plain `http://` with the same pre-signed URL (`StartDownload`; on the device the OSS accelerate host fails certificate
+verification, "No matching trusted root certificate found", with the FULL Mozilla bundle, so HTTPS is not retried first); the planner and the speech request are never retried. The picture is held in RAM; UP = redraw (`Regenerate`), DOWN =
+`SaveToAlbum` (once per picture, `photo_save`, 30000-byte 2 bpp photo). `AiPaintRenderer::IsFullscreenMode()` makes `RawDrawUiManager::RenderAll`
+hide the status bar/frame while a picture is shown; the subject ("画: …") is shown only with the finished picture, never on the working page
+(`Status::subject` is still the previous one while working). Like AI Q&A it refreshes the panel only when painting starts and ends
+(`NeedsRefreshAfterChange` compares a coarse signature). Sim: `fake/ai_chat_platform_fake.cc` answers the image request and serves a synthetic
+PNG in `SIM_AI_FAKE=1` mode (`SIM_AI_IMAGE_PNG=file.png` overrides it), `sim_device` commands `paint TEXT` (skips the recording; real model
+call when `SIM_AI_FAKE` is unset and `DASHSCOPE_API_KEY` is set) and `paintstate`. Verified against the real endpoint from the sim (screens
+look right); **not compiled for the device and never run on hardware**: TLS download of ~1 MB, PSRAM use while decoding, and doing the
+conversion on the 10 KB request task (a long CPU burst; task watchdog) are unverified.
+
+Token board app (`RawDrawPageId::TokenBoard`, Home entry "Token 看板"): Alibaba Bailian balance and cost from the Alibaba Cloud BSS OpenAPI.
+Logic in `common/token_board.{h,cc}` (`board::BoardService` singleton, hardware-free, unit-tested by `sim/tests/test_token_board.cc`):
+RPC signature v1 (own SHA1/HMAC-SHA1, GET with a signed query to `business.aliyuncs.com`), `QueryAccountBalance`, then
+`DescribeInstanceBill` DAILY for yesterday and today (rows with `ProductCode` `sfm`, summed per model from `InstanceID`, `ModelFromInstanceId`);
+one request in flight, chained balance -> yesterday -> today, nothing in the background: `Refresh(false)` runs when the page is entered
+(`RawDrawUiManager::InitRenderer`/`SimUi::SwitchPage`; stale after 120 s), BOOT = `Refresh(true)`. **The bill carries money only, no token counts**
+(`Usage` is empty), and there is no hourly bill: `Granularity=HOURLY` ignores `BillingDate` and returns the month so far, and today's daily bill lags.
+So today/this-hour cost are estimates from the balance (first balance seen in the Beijing day/hour is the baseline, kept in NVS key `base`; a top-up
+resets it; today = max(baseline - balance, today's bill total)). Hardware behind `board::Platform` (generic `Send` = the AI chat platform's, plus
+`Load/Save` and `Now`): firmware `common/token_board_platform_esp.cc` (NVS namespace `tokenboard`: `ak_id`, `ak_secret`, `base`), sim
+`fake/token_board_platform_fake.cc` (real mode = curl to the real endpoint with `ALIBABA_CLOUD_ACCESS_KEY_ID`/`_SECRET`; `SIM_BOARD_FAKE=1` = canned
+responses, balance drops 0.05 per refresh). Renderer `token_board_renderer.*` (header pill with the provider name + page dots; hero: balance in 2x scaled text on black
+(`DrawTextScaled`, the only fonts are 16 px; falls back to 1x when it does not fit), today and this hour as 1x text on the right; two cards below, yesterday / today by model with a
+yellow proportion bar per row; `NeedsRefreshAfterChange` compares content so the start of a refresh does not redraw). One provider per page,
+`board::Providers()` lists them (阿里百炼, DeepSeek); UP/DOWN page through them (and refresh the newly shown one if stale), a new provider needs an
+entry there, its own service and a render branch. Layout: top half = totals (`RenderHero`), bottom half = detail cards (`RenderRowsCard`, top 3 rows).
+DeepSeek (`board::DeepSeekService`, NVS `ds_key`/`ds_base`, web `POST /api/tokenboard/deepseek`, sim env `DEEPSEEK_API_KEY`, sim command `dsstate`): only
+`GET https://api.deepseek.com/user/balance` (Bearer API key); DeepSeek has no usage/bill API an API key can call (the console's `platform.deepseek.com/api/v0/usage/*`
+needs a login session token, not used), so its detail card shows the balance parts (topped-up, granted); today/hour are balance estimates (`board::Baselines`, shared
+with Bailian). Never add the three balance fields (`total_balance` already includes the others). Not run against the real DeepSeek endpoint yet. Refresh interval (10/30/60 min, default 60, NVS key `interval`, `POST /api/tokenboard/interval`) is the
+validity of the data when the page is entered, not a polling period (same rule as weather: no background polling). Web page `/tokenboard` + `/api/tokenboard/state|key`
+(`web_apps.cc`; write-only, the secret is never returned; `max_uri_handlers` raised to 40). The AccessKey should be a RAM sub-account with
+`AliyunBSSReadOnlyAccess`; it is stored in NVS in plain text. China site only. Sim command `boardstate`. Verified against the real BSS endpoint from
+the sim; **not compiled for the device, never run on hardware** (TLS, NVS, SNTP clock, the 48 KB response cap = ~40 bill rows are unverified).
+
 Calendar app (`RawDrawPageId::CalendarApp`, Home entry "日历"; the older `Calendar` page/`CalendarRenderer` is a different,
 unreachable lunar calendar): `ui/renderers/rawdraw/calendar_app_renderer.*` (month grid, bell icon drawn from a 9x9 bitmap on dates with
 reminders, "today" list view; UP/DOWN = month, BOOT = back to current month, or today's list when already there) reads
@@ -67,6 +116,9 @@ reminders, "today" list view; UP/DOWN = month, BOOT = back to current month, or 
 unit-tested by `sim/tests/test_reminders.cc`). Both firmware and sim persist to a plain file via `NewFilePersistence` (firmware
 `/spiffs/reminders.json` set up in the `RawDrawUiManager` constructor, which also redraws the page on `SetOnChange`; sim
 `--reminders-file`, default `/tmp/sim_reminders.json`). `sim_device --today YYYY-MM-DD` fixes the calendar's clock (tests use it). Web page
+The bottom notice line comes from `common/notice_api.{h,cc}`: its task is idle and fetches **only when the calendar app is entered**
+(`notice_api_refresh_if_stale()` from `RawDrawUiManager::InitRenderer`/`SimUi::SwitchPage`; never at boot/Wi-Fi connect, no timer; the 10/30/60 min interval is
+the validity of the last fetch, 0 = never fetch; `sim_device noticestate` counts fetches for `NoticeOnDemandTest`). Web page
 `/calendar` + `GET/POST /api/reminders` (`web_apps.cc`; POST replaces one date's list). `StartLanHttpServer` hands the address to the page.
 Colors in `CalendarAppRenderer` are the raw `rawdraw::Color` values on purpose (white page; black weekday band with yellow Sat/Sun letters; red
 weekend numbers; yellow festival names; yellow block with black text = today; bell red, black on today), not theme tokens; the web grid
@@ -80,6 +132,20 @@ Chinese festivals (2010-2050 only; nothing outside) come from `common/chinese_ca
 `LUNAR_DAYS_CSV=file sim/build/test_chinese_calendar` with the CSV from the script's `--dump-days`; plain `make -C sim test` only runs the
 known-date checks. The web page gets them from `GET /api/festivals?year=`. No statutory holiday/make-up-workday schedule.
 Not run on hardware: SPIFFS write path, the system clock being synced, a four-color panel's red "today" highlight on the B/W Note 4.
+
+Recipes app (`RawDrawPageId::Recipes`, Home entry "菜谱"): 10 built-in recipes from HowToCook (Unlicense), no network, no service.
+Data: `sim/tools/recipes/recipes.json` (hand-condensed text: every step one 16 px line, intro <= 3 lines, page 2 <= 300 px) and `recipes/photos/<id>.jpg`
+(360x278 center crops; `gen_recipes.py --import-photos HOWTOCOOK_DIR` re-imports them) -> `python3 -I sim/tools/gen_recipes.py` writes
+`common/recipes_data.inc` (const arrays in flash, ~90 KB; photos 180x139 2 bpp BWRY, Floyd-Steinberg, same codes as `rawdraw::Color`) which only
+`common/recipes.cc` includes (`recipes::Count()/Get(i)`). Renderer `ui/renderers/rawdraw/recipe_renderer.*` (shared with the sim): list mode
+(like Home, status bar drawn by the manager) and a full-screen detail mode (`IsFullscreenMode()` -> `RawDrawUiManager::RenderAll` hides the status
+bar/frame, like the AI painter's picture): page 1 photo/stars/kcal/intro, page 2 ingredients + steps (+ yellow tip bar when it fits). DOWN after page 2
+goes on to the next recipe's page 1 (UP the reverse), BOOT = back to the list. UP/DOWN on this page are in the manager's `cursor_click` set (coalesced,
+one refresh ~800 ms after the last press). Fonts: Regular 16 px for body, Medium **24 px** (not 16) for titles; stars are a 11x11 bitmap, no glyphs.
+`sim/tests/test_recipes.cc` checks every character against the real font (`SourceHanSansSC_*_slim` are subsets: a missing glyph renders blank), one-line
+steps and the 300 px budget, so rerun `make -C sim test` after editing the JSON. `sim_main --page recipes --keys boot,down` renders the pages.
+Not compiled for the device (`idf.py build` not run); the data file is plain const arrays, so the likely device-only risks are the link size (+~90 KB) and
+how the dithered photos look on the real panel.
 
 Gotchas found while building this (keep in mind for new pages):
 - Entering a page runs the renderer's `Init()`, which resets it (gallery: card mode, first photo). Anything
@@ -97,8 +163,8 @@ firmware file into `sim/`.
 Shared (compiled unmodified, fixes apply to both):
 - `firmware/main/rawdraw/*` and `rawdraw/components/*` (except `calendar.cc`, needs `holiday_fetcher.h`)
 - renderers: `home_renderer`, `photo_gallery`, `photo_detail_renderer`, `weather_renderer`,
-  `weather_detail_renderer`, `settings_renderer`, `ap_transfer_renderer`, `voice_renderer`, `ai_chat_renderer`
-- `common/ai_chat.cc`, `common/weather_parse.cc`, `common/voice_recordings.cc`
+  `weather_detail_renderer`, `settings_renderer`, `ap_transfer_renderer`, `voice_renderer`, `ai_chat_renderer`, `ai_paint_renderer`
+- `common/ai_chat.cc`, `common/ai_paint.cc`, `common/png_decode.cc`, `common/weather_parse.cc`, `common/voice_recordings.cc`
 - `ui/app_registry.cc`, `ui/app_shell.cc`
 - `ui/renderers/rawdraw/ap_transfer_server.cc` (upload/album HTTP API and embedded HTML)
 - `components/78__xiaozhi-fonts/src/*.c` (fonts, except `cbin_font.c`)
@@ -162,7 +228,9 @@ python3 sim/web/server.py                     # web UI http://127.0.0.1:8000, de
   double-click either.
 - Weather: data source is Open-Meteo (no key). `common/weather_parse.cc` (shared with the sim, unit-tested by
   `sim/tests/test_weather_parse.cc` in `make -C sim test`) parses it; `weather_api.cc` (firmware only) does HTTPS
-  in its own task. `Application` starts it on Wi-Fi connect via `RawDrawUiManager::StartWeatherService()`.
+  in its own task. `Application` creates the (idle) task on Wi-Fi connect via `RawDrawUiManager::StartWeatherService()`; **it fetches nothing then and has no timer**: weather is
+  fetched only on request (`weather_api_refresh_if_stale()` from `RawDrawUiManager::InitRenderer`/`SimUi::SwitchPage` when the Weather page is entered, the
+  refresh key, a city switch, saving the web settings). `interval_min` is the cache validity, not a polling period. Do not add background polling.
   Up to 5 cities (`WeatherConfig`), UP/DOWN on the weather page calls `weather_api_select_city` (async; the sim
   fake answers synchronously, so `WeatherRenderer` sets its loading state *before* calling it). The sim has no network: `--demo-weather` (or saving a city at `/weather`) pushes a canned sample.
 - Device web UI: `/` is the app-launcher home (`ui/renderers/rawdraw/web_apps.cc`), `/album` the photo page,

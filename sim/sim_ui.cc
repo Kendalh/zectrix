@@ -2,8 +2,11 @@
 
 #include <cstdio>
 
+#include "common/notice_api.h"
 #include "common/ai_chat.h"
+#include "common/ai_paint.h"
 #include "fake/ai_chat_platform_fake.h"
+#include "fake/token_board_platform_fake.h"
 #include "sim_fixtures.h"
 
 using ui::RawDrawPageId;
@@ -21,7 +24,10 @@ SimUi::SimUi(const Options& options)
     voice_.SetBackend(&voice_backend_, &voice_store_);
     // Same wiring as Application: the AI page claims the recordings it asked for.
     ai_chat_.SetBackend(&voice_backend_, &voice_store_);
-    voice_backend_.SetOnSaved([this](const std::string& path) { return ai_chat_.OnRecordingSaved(path); });
+    ai_paint_.SetBackend(&voice_backend_, &voice_store_);
+    voice_backend_.SetOnSaved([this](const std::string& path) {
+        return ai_chat_.OnRecordingSaved(path) || ai_paint_.OnRecordingSaved(path);
+    });
     // Same as RawDrawUiManager: reminders persist in a file (SPIFFS on the device). The sim has no panel
     // to refresh, the web UI polls frames, so no on-change hook.
     reminders::Store::Shared().SetPersistence(reminders::NewFilePersistence(options.reminders_file));
@@ -43,8 +49,15 @@ SimUi::SimUi(const Options& options)
         weather_.Update(data);
         weather_detail_.Update(data);
     });
+    // Same as RawDrawUiManager::StartNoticeService().
+    notice_api_start([this](const std::string& notice) {
+        std::lock_guard<std::recursive_mutex> lock(mu_);
+        calendar_.SetNotice(notice);
+    });
     // Same as RawDrawUiManager::StartAiChatService(); the sim has no panel refresh, so no on-change hook.
     ai_chat_.SetAddress(options_.lan_address);
+    ai_paint_.SetAddress(options_.lan_address);
+    token_board_.SetAddress(options_.lan_address);
     calendar_.SetAddress(options_.lan_address);
     int ty, tm, td;
     if (reminders::ParseDateKey(options_.today, &ty, &tm, &td)) {
@@ -57,6 +70,9 @@ SimUi::SimUi(const Options& options)
         calendar_.SetClock([fixed]() { return fixed; });
     }
     ai::ChatService::Get().Start(NewSimChatPlatform());
+    ai::paint::PaintService::Get().Start(NewSimChatPlatform());  // as RawDrawUiManager::StartAiChatService()
+    board::BoardService::Get().Start(NewSimBoardPlatform());      // as RawDrawUiManager::StartTokenBoardService(); no on-change hook
+    board::DeepSeekService::Get().Start(NewSimBoardPlatform());
     // The device fetches once Wi-Fi is up; the simulator only does so when asked to preview the layout.
     if (options_.demo_weather) weather_api_fetch_now();
 }
@@ -72,7 +88,10 @@ const char* SimUi::PageName(RawDrawPageId page) {
         case RawDrawPageId::APTransfer: return "ap_transfer";
         case RawDrawPageId::Voice: return "voice";
         case RawDrawPageId::AiChat: return "ai_chat";
+        case RawDrawPageId::AiPaint: return "ai_paint";
+        case RawDrawPageId::TokenBoard: return "token_board";
         case RawDrawPageId::CalendarApp: return "calendar";
+        case RawDrawPageId::Recipes: return "recipes";
         default: return "unknown";
     }
 }
@@ -81,7 +100,8 @@ bool SimUi::PageFromName(const std::string& name, RawDrawPageId* page) {
     for (RawDrawPageId p : {RawDrawPageId::Home, RawDrawPageId::Gallery, RawDrawPageId::PhotoDetail,
                             RawDrawPageId::Weather, RawDrawPageId::WeatherDetail,
                             RawDrawPageId::Settings, RawDrawPageId::APTransfer, RawDrawPageId::Voice,
-                            RawDrawPageId::AiChat, RawDrawPageId::CalendarApp}) {
+                            RawDrawPageId::AiChat, RawDrawPageId::AiPaint, RawDrawPageId::TokenBoard,
+                            RawDrawPageId::CalendarApp, RawDrawPageId::Recipes}) {
         if (name == PageName(p)) {
             *page = p;
             return true;
@@ -101,7 +121,10 @@ rawdraw::PageRenderer* SimUi::RendererFor(RawDrawPageId page) {
         case RawDrawPageId::APTransfer: return &ap_;
         case RawDrawPageId::Voice: return &voice_;
         case RawDrawPageId::AiChat: return &ai_chat_;
+        case RawDrawPageId::AiPaint: return &ai_paint_;
+        case RawDrawPageId::TokenBoard: return &token_board_;
         case RawDrawPageId::CalendarApp: return &calendar_;
+        case RawDrawPageId::Recipes: return &recipes_;
         default: return nullptr;
     }
 }
@@ -116,10 +139,14 @@ void SimUi::SwitchPage(RawDrawPageId page) {
     if (page == current_) return;
     if (current_ == RawDrawPageId::Voice) voice_.OnLeave();  // as RawDrawUiManager::SwitchPage
     if (current_ == RawDrawPageId::AiChat) ai_chat_.OnLeave();
+    if (current_ == RawDrawPageId::AiPaint) ai_paint_.OnLeave();
     if (auto* r = RendererFor(page)) {
         r->Init(sim::kW, sim::kH);
         r->MarkFullRefresh();
     }
+    if (page == RawDrawPageId::Weather) weather_api_refresh_if_stale();  // as RawDrawUiManager::InitRenderer()
+    if (page == RawDrawPageId::CalendarApp) notice_api_refresh_if_stale();
+    if (page == RawDrawPageId::TokenBoard) board::BoardService::Get().Refresh(false);  // as RawDrawUiManager::InitRenderer()
     current_ = page;
 }
 

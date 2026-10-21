@@ -16,7 +16,9 @@
 #include "components/78__xiaozhi-fonts/include/fa_settings.h"  // for icon macros
 #include "lvgl.h"
 #include "settings.h"
+#include "common/notice_api.h"
 #include "common/ai_chat_platform_esp.h"
+#include "common/token_board_platform_esp.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -34,7 +36,7 @@ static constexpr const char* kRawDrawThemeNvsKey = "rawdraw_theme";
 // it disabled for now. To restore minute-by-minute clock updates later, flip
 // this to true after a safe status-bar-only refresh path exists.
 static constexpr bool kEnableMinuteClockRefresh = false;
-// Home-page, photo-gallery and Voice-list UP/DOWN only move a cursor/selection, and reaching the wanted item takes
+// Home-page, photo-gallery, Voice-list and Recipes UP/DOWN only move a cursor/selection or turn a page, and reaching the wanted item takes
 // several presses while a four-color refresh takes ~16 s. These presses are never locked out; one refresh
 // is requested this long after the last press (the UI pump then runs it within ~1 s).
 static constexpr int kCursorRefreshDelayMs = 800;
@@ -224,7 +226,10 @@ const char* RawDrawUiManager::GetPageTitle(RawDrawPageId page) {
         case RawDrawPageId::Home:     return "首页";
         case RawDrawPageId::Voice:    return "语音";
         case RawDrawPageId::AiChat:   return "AI 问答";
+        case RawDrawPageId::AiPaint:  return "AI 画图";
+        case RawDrawPageId::TokenBoard: return "Token 看板";
         case RawDrawPageId::CalendarApp: return "日历";
+        case RawDrawPageId::Recipes:  return "菜谱";
         default:               return "未知";
     }
 }
@@ -246,7 +251,10 @@ RawDrawUiManager::RawDrawUiManager()
     clock_.SetColor(rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::Accent).fg);
     voice_renderer_ = std::make_unique<rawdraw::VoiceRenderer>();
     ai_chat_renderer_ = std::make_unique<rawdraw::AiChatRenderer>();
+    ai_paint_renderer_ = std::make_unique<rawdraw::AiPaintRenderer>();
+    token_board_renderer_ = std::make_unique<rawdraw::TokenBoardRenderer>();
     calendar_app_renderer_ = std::make_unique<rawdraw::CalendarAppRenderer>();
+    recipe_renderer_ = std::make_unique<rawdraw::RecipeRenderer>();
     // Reminders live in a file on the SPIFFS partition (mounted before this constructor runs, see
     // Application). A browser edit while the calendar is on screen redraws it.
     reminders::Store::Shared().SetPersistence(reminders::NewFilePersistence("/spiffs/reminders.json"));
@@ -510,6 +518,9 @@ void RawDrawUiManager::SwitchPage(RawDrawPageId page) {
     if (current_page_ == RawDrawPageId::AiChat && ai_chat_renderer_) {
         ai_chat_renderer_->OnLeave();
     }
+    if (current_page_ == RawDrawPageId::AiPaint && ai_paint_renderer_) {
+        ai_paint_renderer_->OnLeave();
+    }
 
     // Initialize the new page renderer
     InitRenderer(page);
@@ -554,6 +565,12 @@ void RawDrawUiManager::InitRenderer(RawDrawPageId page) {
         renderer->Init(width_, height_);
         renderer->MarkFullRefresh();
     }
+    // Weather is fetched only when someone looks at it (never at boot or on Wi-Fi connect): stale data is refreshed now.
+    if (page == RawDrawPageId::Weather) weather_api_refresh_if_stale();
+    // Same for the calendar's latest notice.
+    if (page == RawDrawPageId::CalendarApp) notice_api_refresh_if_stale();
+    // Token board: fetched only when the page is entered (and on BOOT), never in the background.
+    if (page == RawDrawPageId::TokenBoard) board::BoardService::Get().Refresh(false);
 }
 
 void RawDrawUiManager::SetCurrentPageWithoutRender(RawDrawPageId page) {
@@ -593,7 +610,10 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::Home:     return home_renderer_.get();
         case RawDrawPageId::Voice:    return voice_renderer_.get();
         case RawDrawPageId::AiChat:   return ai_chat_renderer_.get();
+        case RawDrawPageId::AiPaint:  return ai_paint_renderer_.get();
+        case RawDrawPageId::TokenBoard: return token_board_renderer_.get();
         case RawDrawPageId::CalendarApp: return calendar_app_renderer_.get();
+        case RawDrawPageId::Recipes:  return recipe_renderer_.get();
         default:               return nullptr;
     }
 }
@@ -741,6 +761,19 @@ void RawDrawUiManager::StartWeatherService() {
             RequestActivePageRefresh();
         }
     });
+    // Nothing is fetched here. But if the Weather page was entered before Wi-Fi came up (no task then), ask now.
+    if (current_page_ == RawDrawPageId::Weather) weather_api_refresh_if_stale();
+}
+
+void RawDrawUiManager::StartNoticeService() {
+    notice_api_start([this](const std::string& notice) {
+        // Runs on the notice task.
+        if (!calendar_app_renderer_) return;
+        calendar_app_renderer_->SetNotice(notice);
+        if (current_page_ == RawDrawPageId::CalendarApp) RequestActivePageRefresh();
+    });
+    // Nothing is fetched here. But if the calendar was entered before Wi-Fi came up (no task then), ask now.
+    if (current_page_ == RawDrawPageId::CalendarApp) notice_api_refresh_if_stale();
 }
 
 void RawDrawUiManager::StartAiChatService() {
@@ -754,10 +787,42 @@ void RawDrawUiManager::StartAiChatService() {
         }
     });
     service.Start(NewEspChatPlatform());
+
+    // The AI painter has its own platform instance (own request tasks) but shares the API key slot in NVS.
+    auto& paint = ai::paint::PaintService::Get();
+    paint.SetOnChange([this]() {
+        if (current_page_ == RawDrawPageId::AiPaint && ai_paint_renderer_ &&
+            ai_paint_renderer_->NeedsRefreshAfterChange()) {
+            RequestActivePageRefresh();
+        }
+    });
+    paint.Start(NewEspChatPlatform());
+}
+
+void RawDrawUiManager::StartTokenBoardService() {
+    auto& service = board::BoardService::Get();
+    auto on_change = [this]() {
+        // Runs on the request task or an HTTP handler; the renderer only asks for a redraw when the content changed.
+        if (current_page_ == RawDrawPageId::TokenBoard && token_board_renderer_ &&
+            token_board_renderer_->NeedsRefreshAfterChange()) {
+            RequestActivePageRefresh();
+        }
+    };
+    service.SetOnChange(on_change);
+    service.Start(NewEspBoardPlatform());
+    board::DeepSeekService::Get().SetOnChange(on_change);
+    board::DeepSeekService::Get().Start(NewEspBoardPlatform());  // own platform instance (own request tasks), same NVS namespace
+    // If the page was entered before Wi-Fi came up, the first refresh could not run then.
+    if (current_page_ == RawDrawPageId::TokenBoard) {
+        service.Refresh(false);
+        board::DeepSeekService::Get().Refresh(false);
+    }
 }
 
 bool RawDrawUiManager::StartLanHttpServer(const std::string& ip_address) {
     if (!ap_transfer_server_) return false;
+    if (token_board_renderer_) token_board_renderer_->SetAddress(ip_address);
+    if (ai_paint_renderer_) ai_paint_renderer_->SetAddress(ip_address);
     if (ai_chat_renderer_) ai_chat_renderer_->SetAddress(ip_address);  // shown as the page to open on the AI page
     if (calendar_app_renderer_) calendar_app_renderer_->SetAddress(ip_address);  // and on the calendar page
     return ap_transfer_server_->StartLan(ip_address);
@@ -782,7 +847,8 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
     }
     const bool cursor_click =
         (current_page_ == RawDrawPageId::Home || current_page_ == RawDrawPageId::Gallery ||
-         current_page_ == RawDrawPageId::Voice || current_page_ == RawDrawPageId::Settings) &&
+         current_page_ == RawDrawPageId::Voice || current_page_ == RawDrawPageId::Settings ||
+         current_page_ == RawDrawPageId::Recipes) &&
         (event.type == rawdraw::ButtonEvent::kUpClick || event.type == rawdraw::ButtonEvent::kDownClick);
     if (navigation_click && !cursor_click && input_refresh_locked_.load(std::memory_order_acquire)) {
         const int64_t held_ms = esp_timer_get_time() / 1000 - input_lock_since_ms_.load(std::memory_order_acquire);
@@ -966,7 +1032,10 @@ void RawDrawUiManager::RenderAll(uint8_t* fb, int width, int height) {
         current_page_ == RawDrawPageId::Ebook &&
         ebook_renderer_ &&
         ebook_renderer_->IsPortraitReader();
-    const bool chrome_free_page = false;
+    // The AI painter's picture and an open recipe cover the whole panel, like the fullscreen gallery.
+    const bool chrome_free_page =
+        (current_page_ == RawDrawPageId::AiPaint && ai_paint_renderer_ && ai_paint_renderer_->IsFullscreenMode()) ||
+        (current_page_ == RawDrawPageId::Recipes && recipe_renderer_ && recipe_renderer_->IsFullscreenMode());
 
     // Update central_text based on current page state
     status_bar_data_.central_text.clear();

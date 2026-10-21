@@ -19,12 +19,12 @@ CFLAGS   := -O1 $(INC)
 CXX_SRCS := $(wildcard $(MAIN)/rawdraw/*.cc) \
             $(filter-out %/calendar.cc,$(wildcard $(MAIN)/rawdraw/components/*.cc)) \
             $(addprefix $(MAIN)/ui/renderers/rawdraw/,photo_gallery.cc photo_detail_renderer.cc weather_renderer.cc weather_detail_renderer.cc) \
-            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc voice_renderer.cc ai_chat_renderer.cc calendar_app_renderer.cc) \
+            $(addprefix $(MAIN)/ui/renderers/rawdraw/,home_renderer.cc settings_renderer.cc voice_renderer.cc ai_chat_renderer.cc ai_paint_renderer.cc calendar_app_renderer.cc token_board_renderer.cc recipe_renderer.cc) \
             $(MAIN)/ui/app_registry.cc $(MAIN)/ui/app_shell.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_renderer.cc \
             $(MAIN)/ui/renderers/rawdraw/ap_transfer_server.cc \
-            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc $(MAIN)/common/reminders.cc $(MAIN)/common/chinese_calendar.cc $(MAIN)/common/voice_recordings.cc $(MAIN)/common/ai_chat.cc \
-            fake/ai_chat_platform_fake.cc fake/voice_backend_fake.cc fake/photo_storage.cc fake/weather_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
+            $(MAIN)/ui/renderers/rawdraw/web_apps.cc $(MAIN)/common/weather_parse.cc $(MAIN)/common/reminders.cc $(MAIN)/common/chinese_calendar.cc $(MAIN)/common/voice_recordings.cc $(MAIN)/common/ai_chat.cc $(MAIN)/common/ai_paint.cc $(MAIN)/common/png_decode.cc $(MAIN)/common/token_board.cc $(MAIN)/common/recipes.cc \
+            fake/ai_chat_platform_fake.cc fake/token_board_platform_fake.cc fake/voice_backend_fake.cc fake/photo_storage.cc fake/weather_api_fake.cc fake/notice_api_fake.cc sim_httpd.cc sim_ui.cc sim_main.cc sim_device.cc
 C_SRCS   := $(filter-out %/cbin_font.c,$(wildcard $(FONTS)/*.c $(FONTS)/*/*.c)) sim_platform.c $(CJSON_DIR)/cJSON.c
 
 OBJS := $(patsubst %,$(BUILD)/%.o,$(notdir $(CXX_SRCS) $(C_SRCS)))
@@ -67,17 +67,29 @@ $(BUILD)/test_weather_parse: tests/test_weather_parse.cc $(LIBOBJS)
 $(BUILD)/test_ai_chat: tests/test_ai_chat.cc $(LIBOBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
 
+$(BUILD)/test_ai_paint: tests/test_ai_paint.cc $(LIBOBJS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
+
+$(BUILD)/test_token_board: tests/test_token_board.cc $(LIBOBJS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
+
 $(BUILD)/test_reminders: tests/test_reminders.cc $(LIBOBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
 
 $(BUILD)/test_chinese_calendar: tests/test_chinese_calendar.cc $(LIBOBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
 
-test: all $(BUILD)/test_weather_parse $(BUILD)/test_ai_chat $(BUILD)/test_reminders $(BUILD)/test_chinese_calendar
+$(BUILD)/test_recipes: tests/test_recipes.cc $(LIBOBJS)
+	$(CXX) $(CXXFLAGS) $^ -o $@ -lpthread
+
+test: all $(BUILD)/test_weather_parse $(BUILD)/test_ai_chat $(BUILD)/test_ai_paint $(BUILD)/test_token_board $(BUILD)/test_reminders $(BUILD)/test_chinese_calendar $(BUILD)/test_recipes
 	$(BUILD)/test_weather_parse
 	$(BUILD)/test_ai_chat
+	$(BUILD)/test_ai_paint
+	$(BUILD)/test_token_board
 	$(BUILD)/test_reminders
 	$(BUILD)/test_chinese_calendar
+	$(BUILD)/test_recipes
 	python3 tests/test_navigation.py -v
 	@command -v node >/dev/null && node tests/test_buttons.js || echo "node not found: skipped tests/test_buttons.js"
 

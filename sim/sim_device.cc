@@ -9,6 +9,9 @@
 //   screen          just render the current screen
 //   jump <page>     debug: switch page directly (home gallery weather settings ap_transfer ...)
 //   aistate         debug: AI sessions and the current conversation as a JSON line ("AISTATE {...}")
+//   paint TEXT      debug: paint TEXT right away (no recording), like a spoken subject; pair with paintstate
+//   noticestate     debug: how often the latest notice was fetched ("NOTICESTATE {...}")
+//   paintstate      debug: AI painter status as a JSON line ("PAINTSTATE {...}")
 //   reset           like a reboot: back to the Home page
 //   quit
 // With --serve there is no command loop; the process just serves HTTP until killed.
@@ -26,10 +29,15 @@
 #include <cJSON.h>
 
 #include "common/ai_chat.h"
+#include "common/ai_paint.h"
+#include "common/token_board.h"
+#include "common/photo_storage.h"
 #include "sim_fixtures.h"
 #include "sim_ui.h"
 
 using namespace sim;
+
+int sim_notice_fetch_count();  // fake/notice_api_fake.cc
 
 int main(int argc, char** argv) {
     bool serve_only = false, seed = false;
@@ -127,6 +135,62 @@ int main(int argc, char** argv) {
             cJSON_AddStringToObject(root, "error", cur.last_error.c_str());
             char* text = cJSON_PrintUnformatted(root);
             printf("AISTATE %s\n", text);
+            cJSON_free(text);
+            cJSON_Delete(root);
+        } else if (cmd == "paint") {  // debug/test: start painting `arg` (a real model call unless SIM_AI_FAKE is set)
+            std::string rest, error;
+            std::getline(in, rest);  // the subject may contain spaces: `arg` is only its first word
+            if (ai::paint::PaintService::Get().Draw(arg + rest, &error)) printf("OK\n");
+            else printf("ERR %s\n", error.c_str());
+        } else if (cmd == "boardstate") {  // debug/test: token board snapshot as one JSON line (no screen)
+            const auto snap = board::BoardService::Get().GetSnapshot();
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddBoolToObject(root, "configured", snap.configured);
+            cJSON_AddBoolToObject(root, "loading", snap.loading);
+            cJSON_AddStringToObject(root, "error", snap.error.c_str());
+            cJSON_AddBoolToObject(root, "has_balance", snap.has_balance);
+            cJSON_AddNumberToObject(root, "balance", snap.balance);
+            cJSON_AddNumberToObject(root, "today_cost", snap.today_cost);
+            cJSON_AddNumberToObject(root, "hour_cost", snap.hour_cost);
+            cJSON_AddNumberToObject(root, "yesterday_total", snap.yesterday.total);
+            cJSON_AddNumberToObject(root, "yesterday_models", static_cast<double>(snap.yesterday.models.size()));
+            cJSON_AddNumberToObject(root, "today_total", snap.today.total);
+            cJSON_AddNumberToObject(root, "today_models", static_cast<double>(snap.today.models.size()));
+            char* text = cJSON_PrintUnformatted(root);
+            printf("BOARDSTATE %s\n", text);
+            cJSON_free(text);
+            cJSON_Delete(root);
+        } else if (cmd == "dsstate") {  // debug/test: DeepSeek snapshot as one JSON line (no screen)
+            const auto snap = board::DeepSeekService::Get().GetSnapshot();
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddBoolToObject(root, "configured", snap.configured);
+            cJSON_AddBoolToObject(root, "loading", snap.loading);
+            cJSON_AddStringToObject(root, "error", snap.error.c_str());
+            cJSON_AddBoolToObject(root, "has_balance", snap.has_balance);
+            cJSON_AddNumberToObject(root, "total", snap.balance.primary.total);
+            cJSON_AddNumberToObject(root, "granted", snap.balance.primary.granted);
+            cJSON_AddNumberToObject(root, "topped_up", snap.balance.primary.topped_up);
+            cJSON_AddNumberToObject(root, "today_cost", snap.today_cost);
+            cJSON_AddNumberToObject(root, "hour_cost", snap.hour_cost);
+            char* text = cJSON_PrintUnformatted(root);
+            printf("DSSTATE %s\n", text);
+            cJSON_free(text);
+            cJSON_Delete(root);
+        } else if (cmd == "noticestate") {  // debug/test: number of notice fetches so far (no screen)
+            printf("NOTICESTATE {\"fetches\":%d}\n", sim_notice_fetch_count());
+        } else if (cmd == "paintstate") {  // debug/test: AI painter status as one JSON line (no screen)
+            const auto st = ai::paint::PaintService::Get().GetStatus();
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddNumberToObject(root, "phase", static_cast<int>(st.phase));
+            cJSON_AddStringToObject(root, "subject", st.subject.c_str());
+            cJSON_AddStringToObject(root, "error", st.error.c_str());
+            cJSON_AddBoolToObject(root, "working", st.working);
+            cJSON_AddBoolToObject(root, "has_image", st.has_image);
+            cJSON_AddBoolToObject(root, "saved", st.saved);
+            cJSON_AddNumberToObject(root, "revision", st.revision);
+            cJSON_AddNumberToObject(root, "photos", photo_get_count());
+            char* text = cJSON_PrintUnformatted(root);
+            printf("PAINTSTATE %s\n", text);
             cJSON_free(text);
             cJSON_Delete(root);
         } else if (cmd == "reset") {

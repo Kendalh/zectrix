@@ -65,14 +65,14 @@ class NavigationTest(unittest.TestCase):
         page, _, _ = self.dev.cmd("reset")
         self.assertEqual(page, "home")
 
-    # App order: 相册, 天气, 日历, 语音, AI 问答, 配网, 设置
+    # App order: 相册, 天气, 日历, 菜谱, 语音, AI 问答, AI 画图, Token 看板, 配网, 设置
     def open_app(self, index):
         for _ in range(index):
             self.dev.keys("down")
         return self.dev.keys("boot")
 
     def test_each_app_opens_and_boot_long_returns_home(self):
-        expected = ["gallery", "weather", "calendar", "voice", "ai_chat", "ap_transfer", "settings"]
+        expected = ["gallery", "weather", "calendar", "recipes", "voice", "ai_chat", "ai_paint", "token_board", "ap_transfer", "settings"]
         for index, page in enumerate(expected):
             with self.subTest(app=index):
                 self.assertEqual(self.open_app(index), page)
@@ -82,10 +82,10 @@ class NavigationTest(unittest.TestCase):
 
     def test_home_scrolls_to_apps_beyond_the_fifth(self):
         home = self.dev.cmd("reset")[2]
-        for _ in range(6):
+        for _ in range(9):
             self.dev.keys("down")
         self.assertNotEqual(self.dev.cmd("screen")[2], home)  # the list scrolled
-        self.assertEqual(self.dev.keys("boot"), "settings")  # 7th app
+        self.assertEqual(self.dev.keys("boot"), "settings")  # 10th app
 
     def test_selection_wraps(self):
         self.assertEqual(self.dev.keys("up", "boot"), "settings")  # last entry: 设置
@@ -175,7 +175,7 @@ class VoiceAppTest(unittest.TestCase):
     def test_boot_long_returns_home_and_stops_recording(self):
         self.dev.cmd("key uplong")
         self.assertEqual(self.dev.keys("bootlong"), "home")
-        self.dev.keys("down", "down", "down")  # 语音 is the 4th app
+        self.dev.keys("down", "down", "down", "down")  # 语音 is the 5th app
         self.assertEqual(self.dev.keys("boot"), "voice")
         idle = self.dev.cmd("screen")[2]
         # a new recording can start: the earlier one was stopped when the page was left
@@ -241,7 +241,7 @@ class AiChatAppTest(unittest.TestCase):
 
     def test_app_opens_from_home(self):
         self.dev.cmd("reset")
-        self.dev.keys("down", "down", "down", "down")  # 相册, 天气, 日历, 语音, AI 问答
+        self.dev.keys("down", "down", "down", "down", "down")  # 相册, 天气, 日历, 菜谱, 语音, AI 问答
         self.assertEqual(self.dev.keys("boot"), "ai_chat")
         self.assertEqual(self.dev.keys("bootlong"), "home")
 
@@ -351,6 +351,178 @@ class AiChatAppTest(unittest.TestCase):
         self.assertFalse(self.api("/api/ai/key", {"key": ""})["success"])
         self.assertTrue(self.api("/api/ai/key", {"key": "sk-abc.def"})["success"])
         self.assertIn("http", self.api("/api/ai/ask", {"text": "hi"}))  # asking from the web is not offered
+
+
+class AiPaintAppTest(unittest.TestCase):
+    """AI 画图: hold UP to say a subject, the four-colour picture appears; UP redraws, DOWN saves to the album.
+    SIM_AI_FAKE gives a canned transcript, a canned image reply and a synthetic PNG (no network)."""
+
+    SPOKEN = "上海外滩的夜景"
+    PHASE_READY = 6  # ai::paint::Phase::Ready (Idle, Transcribing, Planning, Generating, Downloading, Converting, Ready)
+    SPEECH_FILE = "/tmp/sim_test_paint_speech.txt"  # what the fake speaker says; re-read at every recording
+
+    @classmethod
+    def setUpClass(cls):
+        Path(cls.SPEECH_FILE).write_text(cls.SPOKEN + "\n")
+        os.environ["SIM_AI_SPEECH_FILE"] = cls.SPEECH_FILE  # read by the child process at spawn time
+        try:
+            cls.dev = Device()
+        finally:
+            del os.environ["SIM_AI_SPEECH_FILE"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+
+    def setUp(self):
+        self.dev.cmd("reset")
+        self.dev.cmd("jump ai_paint")
+
+    def state(self):
+        self.dev.proc.stdin.write("paintstate\n")
+        self.dev.proc.stdin.flush()
+        line = self.dev.proc.stdout.readline().strip()
+        assert line.startswith("PAINTSTATE "), line
+        return json.loads(line[len("PAINTSTATE "):])
+
+    def wait_ready(self, revision):
+        for _ in range(300):
+            st = self.state()
+            if st["revision"] >= revision and not st["working"] and st["phase"] == self.PHASE_READY:
+                return st
+            time.sleep(0.05)
+        self.fail("no picture: %s" % self.state())
+
+    def speak(self, revision):
+        self.dev.keys("uplong", "uplongrelease")
+        return self.wait_ready(revision)
+
+    def test_app_opens_from_home(self):
+        self.dev.cmd("reset")
+        for _ in range(6):
+            self.dev.keys("down")  # 相册, 天气, 日历, 菜谱, 语音, AI 问答, AI 画图
+        self.assertEqual(self.dev.keys("boot"), "ai_paint")
+        self.assertEqual(self.dev.keys("bootlong"), "home")
+
+    def test_spoken_subject_is_painted_redrawn_and_saved(self):
+        start = self.state()
+        intro = self.dev.cmd("screen")[2]
+        st = self.speak(start["revision"] + 1)
+        self.assertEqual(st["subject"], self.SPOKEN)               # recording -> transcript -> subject
+        self.assertTrue(st["has_image"] and not st["saved"])
+        picture = self.dev.cmd("screen")[2]
+        if not start["has_image"]:                                  # tests share one process: only the first sees the intro
+            self.assertNotEqual(picture, intro)                    # the picture replaces the instructions
+
+        before = st["photos"]
+        self.dev.keys("down")                                      # DOWN: save to the album
+        st = self.state()
+        self.assertTrue(st["saved"])
+        self.assertEqual(st["photos"], before + 1)
+        self.dev.keys("down")                                      # saving twice does nothing
+        self.assertEqual(self.state()["photos"], before + 1)
+
+        self.dev.keys("up")                                        # UP: redraw the same subject
+        st = self.wait_ready(st["revision"] + 1)
+        self.assertEqual(st["subject"], self.SPOKEN)
+        self.assertFalse(st["saved"])                              # a new picture is not saved yet
+        self.dev.keys("down")
+        self.assertEqual(self.state()["photos"], before + 2)
+
+    def test_long_press_after_a_picture_paints_the_new_subject(self):
+        """Regression: with a picture on screen, hold UP and say something else: the new subject is painted, not the old one."""
+        Path(self.SPEECH_FILE).write_text(self.SPOKEN + "\n")
+        st = self.speak(self.state()["revision"] + 1)
+        self.assertEqual(st["subject"], self.SPOKEN)
+        Path(self.SPEECH_FILE).write_text("日本富士山\n")
+        st = self.speak(st["revision"] + 1)
+        self.assertEqual(st["subject"], "日本富士山")
+        self.dev.keys("up")                                        # a click redraws the *current* subject, not an older one
+        st = self.wait_ready(st["revision"] + 1)
+        self.assertEqual(st["subject"], "日本富士山")
+        Path(self.SPEECH_FILE).write_text(self.SPOKEN + "\n")
+
+    def test_keys_before_any_picture_do_nothing(self):
+        if self.state()["has_image"]:
+            self.skipTest("a picture already exists in this process")
+        self.dev.keys("up", "down")
+        st = self.state()
+        self.assertFalse(st["working"])
+        self.assertFalse(st["saved"])
+
+
+class WeatherOnDemandTest(unittest.TestCase):
+    """Weather is fetched only when the Weather page is entered, never at boot or in the background."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dev = Device()
+        cls.base = f"http://127.0.0.1:{PORT}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+
+    def last(self):
+        return json.load(urllib.request.urlopen(self.base + "/api/weather"))["last"]
+
+    def test_nothing_is_fetched_until_the_weather_page_is_opened(self):
+        self.assertIsNone(self.last())                      # fresh start: no request was made
+        for page in ("home", "gallery", "ai_chat", "ai_paint", "calendar", "settings"):
+            self.dev.cmd(f"jump {page}")
+        time.sleep(0.5)
+        self.assertIsNone(self.last())                      # other pages do not fetch weather either
+        self.dev.cmd("jump weather")
+        for _ in range(100):
+            if self.last() is not None:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(self.last())                   # entering the page fetched it
+
+
+class NoticeOnDemandTest(unittest.TestCase):
+    """The calendar's latest notice is fetched only when the calendar app is entered, never at boot or in the background."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dev = Device()
+        cls.base = f"http://127.0.0.1:{PORT}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+
+    def fetches(self):
+        self.dev.proc.stdin.write("noticestate\n")
+        self.dev.proc.stdin.flush()
+        line = self.dev.proc.stdout.readline().strip()
+        assert line.startswith("NOTICESTATE "), line
+        return json.loads(line[len("NOTICESTATE "):])["fetches"]
+
+    def set_interval(self, minutes):
+        req = urllib.request.Request(f"{self.base}/api/notice", method="POST", data=json.dumps({"interval": minutes}).encode())
+        self.assertTrue(json.load(urllib.request.urlopen(req))["success"])
+
+    def test_notice_is_fetched_on_entering_the_calendar_only(self):
+        self.assertEqual(self.fetches(), 0)                 # fresh start: nothing was requested
+        for page in ("home", "gallery", "weather", "ai_chat", "ai_paint", "settings"):
+            self.dev.cmd(f"jump {page}")
+        self.assertEqual(self.fetches(), 0)                 # other pages do not fetch it
+        self.dev.cmd("jump calendar")
+        self.assertEqual(self.fetches(), 1)                 # entering the calendar app does
+        self.dev.cmd("jump home")
+        self.dev.cmd("jump calendar")
+        self.assertEqual(self.fetches(), 1)                 # still valid (interval 30 min): no second request
+        self.set_interval(10)                               # changing the setting never fetches by itself...
+        self.assertEqual(self.fetches(), 1)
+        self.dev.cmd("jump home")
+        self.dev.cmd("jump calendar")
+        self.assertEqual(self.fetches(), 2)                 # ...the next entry does
+        self.set_interval(0)                                # "never fetch": no request, ever
+        self.dev.cmd("jump home")
+        self.dev.cmd("jump calendar")
+        self.assertEqual(self.fetches(), 2)
+        self.set_interval(30)
 
 
 class AiChatPagingTest(unittest.TestCase):
@@ -468,10 +640,88 @@ class CalendarAppTest(unittest.TestCase):
             r = json.load(urllib.request.urlopen(f"{self.base}/api/festivals?year={bad}"))
             self.assertEqual(r["error"], "bad_date")
 
+    def test_notice_interval_setting(self):
+        def post(v):
+            req = urllib.request.Request(f"{self.base}/api/notice", method="POST", data=json.dumps({"interval": v}).encode())
+            return json.load(urllib.request.urlopen(req))
+        self.assertEqual(json.load(urllib.request.urlopen(f"{self.base}/api/notice"))["interval"], 30)
+        for v in (10, 60, 0, 30):
+            self.assertEqual(post(v)["interval"], v)
+        self.assertEqual(post(45)["error"], "invalid_interval")
+        self.assertEqual(json.load(urllib.request.urlopen(f"{self.base}/api/notice"))["interval"], 30)
+        self.assertIn("/api/notice", urllib.request.urlopen(f"{self.base}/calendar").read().decode("utf-8"))
+
     def test_calendar_web_page_is_served(self):
         html = urllib.request.urlopen(f"{self.base}/calendar").read().decode("utf-8")
         self.assertIn("/api/reminders", html)
         self.assertIn("/calendar", urllib.request.urlopen(f"{self.base}/").read().decode("utf-8"))
+
+
+class RecipeAppTest(unittest.TestCase):
+    """菜谱: 10 built-in recipes. The list scrolls with UP/DOWN, BOOT opens one (two full-screen pages), UP/DOWN turn pages
+    and run on into the neighbouring recipe, BOOT goes back to the list, BOOT long returns Home."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dev = Device()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+
+    def setUp(self):
+        self.dev.cmd("reset")
+        self.dev.cmd("jump recipes")
+
+    def key(self, name):
+        return self.dev.cmd("key " + name)[2]
+
+    def screen(self):
+        return self.dev.cmd("screen")[2]
+
+    def test_opens_from_home_as_fourth_app(self):
+        self.dev.cmd("reset")
+        self.assertEqual(self.dev.keys("down", "down", "down", "boot"), "recipes")
+
+    def test_list_selection_moves_and_wraps(self):
+        first = self.screen()
+        self.assertNotEqual(self.key("down"), first)
+        self.assertEqual(self.key("up"), first)
+        self.assertNotEqual(self.key("up"), first)  # wrapped to the last recipe
+        self.assertEqual(self.key("down"), first)   # and DOWN wraps back to the first
+        for _ in range(10):
+            self.key("down")
+        self.assertEqual(self.screen(), first)      # ten recipes: ten DOWN presses are a full circle
+
+    def test_boot_opens_two_pages_and_boot_returns_to_list(self):
+        listing = self.screen()
+        page1 = self.key("boot")
+        self.assertNotEqual(page1, listing)
+        page2 = self.key("down")
+        self.assertNotEqual(page2, page1)
+        self.assertEqual(self.key("up"), page1)
+        self.key("down")
+        self.assertEqual(self.key("boot"), listing)  # BOOT closes the recipe, the selection is unchanged
+
+    def test_down_after_page_two_goes_to_the_next_recipe_and_up_comes_back(self):
+        first = self.key("boot")
+        self.key("down")
+        second = self.key("down")                    # page 1 of recipe 2
+        self.assertNotEqual(second, first)
+        self.key("up")                               # page 2 of recipe 1
+        self.assertEqual(self.key("up"), first)      # page 1 of recipe 1 again
+
+    def test_ten_recipes_of_two_pages_make_a_circle(self):
+        first = self.key("boot")
+        seen = {first}
+        for _ in range(19):
+            seen.add(self.key("down"))
+        self.assertEqual(len(seen), 20)              # every page is different
+        self.assertEqual(self.key("down"), first)    # and the 21st press is back at the start
+
+    def test_boot_long_returns_home_from_a_recipe(self):
+        self.key("boot")
+        self.assertEqual(self.dev.keys("bootlong"), "home")
 
 
 if __name__ == "__main__":

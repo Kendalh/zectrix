@@ -21,7 +21,10 @@
 #include "ui/renderers/rawdraw/settings_renderer.h"
 #include "ui/renderers/rawdraw/voice_renderer.h"
 #include "ui/renderers/rawdraw/ai_chat_renderer.h"
+#include "ui/renderers/rawdraw/token_board_renderer.h"
+#include "ui/renderers/rawdraw/ai_paint_renderer.h"
 #include "ui/renderers/rawdraw/calendar_app_renderer.h"
+#include "ui/renderers/rawdraw/recipe_renderer.h"
 #include "fake/voice_backend_fake.h"
 #include "common/voice_recordings.h"
 #include "ui/renderers/rawdraw/weather_detail_renderer.h"
@@ -88,5 +91,8 @@ private:
     voice::FakeVoiceBackend voice_backend_;
     rawdraw::VoiceRenderer voice_;
     rawdraw::CalendarAppRenderer calendar_;
+    rawdraw::RecipeRenderer recipes_;  // built-in data (common/recipes.h), no service
     rawdraw::AiChatRenderer ai_chat_;  // state lives in ai::ChatService (started in the constructor)
+    rawdraw::TokenBoardRenderer token_board_;  // state lives in board::BoardService (started in the constructor)
+    rawdraw::AiPaintRenderer ai_paint_;  // state lives in ai::paint::PaintService (started in the constructor)
 };

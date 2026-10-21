@@ -18,7 +18,10 @@
 #include "ui/renderers/rawdraw/home_renderer.h"
 #include "ui/renderers/rawdraw/voice_renderer.h"
 #include "ui/renderers/rawdraw/ai_chat_renderer.h"
+#include "ui/renderers/rawdraw/ai_paint_renderer.h"
+#include "ui/renderers/rawdraw/token_board_renderer.h"
 #include "ui/renderers/rawdraw/calendar_app_renderer.h"
+#include "ui/renderers/rawdraw/recipe_renderer.h"
 #include "ui/renderers/rawdraw/chat_renderer.h"
 #include "ui/renderers/rawdraw/settings_renderer.h"
 #include "ui/renderers/rawdraw/ebook_renderer.h"
@@ -184,8 +187,14 @@ public:
     // Start the background weather refresh (idempotent; call once Wi-Fi is connected).
     void StartWeatherService();
 
-    // Start the AI Q&A service (idempotent; call once Wi-Fi is connected).
+    // Start the latest-notice fetch shown in the calendar app (idempotent; call once Wi-Fi is connected).
+    void StartNoticeService();
+
+    // Start the AI Q&A and AI painter services (idempotent; call once Wi-Fi is connected).
     void StartAiChatService();
+
+    // Start the token board service (idempotent; call once Wi-Fi is connected). Nothing is fetched until the page is shown.
+    void StartTokenBoardService();
     void StopLanHttpServer();
 
     /**
@@ -313,6 +322,7 @@ public:
     rawdraw::SettingsRenderer* GetSettingsRenderer() { return settings_renderer_.get(); }
     rawdraw::VoiceRenderer* GetVoiceRenderer() { return voice_renderer_.get(); }
     rawdraw::AiChatRenderer* GetAiChatRenderer() { return ai_chat_renderer_.get(); }
+    rawdraw::AiPaintRenderer* GetAiPaintRenderer() { return ai_paint_renderer_.get(); }
     rawdraw::PhotoGalleryRenderer* GetPhotoGalleryRenderer() { return photo_gallery_renderer_.get(); }
     rawdraw::PhotoDetailRenderer* GetPhotoDetailRenderer() { return photo_detail_renderer_.get(); }
     rawdraw::WeatherRenderer* GetWeatherRenderer() { return weather_renderer_.get(); }
@@ -433,7 +443,10 @@ private:
     std::unique_ptr<rawdraw::HomeRenderer> home_renderer_;
     std::unique_ptr<rawdraw::VoiceRenderer> voice_renderer_;
     std::unique_ptr<rawdraw::AiChatRenderer> ai_chat_renderer_;
+    std::unique_ptr<rawdraw::AiPaintRenderer> ai_paint_renderer_;
+    std::unique_ptr<rawdraw::TokenBoardRenderer> token_board_renderer_;
     std::unique_ptr<rawdraw::CalendarAppRenderer> calendar_app_renderer_;
+    std::unique_ptr<rawdraw::RecipeRenderer> recipe_renderer_;
     std::unique_ptr<rawdraw::ChatRenderer> chat_renderer_;
     std::unique_ptr<rawdraw::EbookRenderer> ebook_renderer_;
     std::unique_ptr<rawdraw::WifiRenderer> wifi_renderer_;
